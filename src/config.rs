@@ -6,6 +6,7 @@ use crate::log;
 /// Provider 配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderConfig {
+    #[serde(default)]
     pub name: String,
     pub domain: String,
     #[serde(default = "default_login_path")]
@@ -81,9 +82,12 @@ impl AppConfig {
             Ok(providers_str) => {
                 log::info("PROVIDERS environment variable found, parsing custom providers...");
                 match serde_json::from_str::<HashMap<String, ProviderConfig>>(&providers_str) {
-                    Ok(custom_providers) => {
-                        for (name, provider) in &custom_providers {
-                            log::info_f(name, &format!("Custom provider loaded: domain={}, sign_in_path={}, user_info_path={}, api_user_key={}",
+                    Ok(mut custom_providers) => {
+                        for (key, provider) in custom_providers.iter_mut() {
+                            if provider.name.is_empty() {
+                                provider.name = key.clone();
+                            }
+                            log::info_f(key, &format!("Custom provider loaded: domain={}, sign_in_path={}, user_info_path={}, api_user_key={}",
                                 provider.domain,
                                 provider.sign_in_path.as_deref().unwrap_or("None"),
                                 provider.user_info_path,
