@@ -1,5 +1,6 @@
 use gpui::*;
-use gpui_component::button::Button;
+use gpui_component::button::{Button, ButtonVariants};
+use gpui_component::Sizable;
 
 use crate::app_state::{AppState, LogLevel};
 use crate::theme::Glass;

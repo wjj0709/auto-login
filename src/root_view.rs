@@ -1,6 +1,6 @@
 use gpui::*;
-use gpui_component::button::{Button, ButtonGroup};
-use gpui_component::ActiveTheme;
+use gpui_component::button::{Button, ButtonVariants};
+use gpui_component::Disableable;
 
 use crate::app_state::{AppState, ActivePanel, LogLevel};
 use crate::theme::Glass;
