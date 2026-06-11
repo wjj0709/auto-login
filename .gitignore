@@ -1,6 +1,14 @@
 .idea
 .vscode
 
+# 构建数据
 target
 
+# 真实的配置信息
 .env
+
+# 运行时产物
+balance_hash.txt
+
+# 参考数据
+docs/reference
