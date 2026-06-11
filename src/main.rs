@@ -10,7 +10,7 @@ use std::time::Instant;
 use chrono::Local;
 
 use balance::{generate_balance_hash, load_balance_hash, save_balance_hash};
-use checkin::{format_check_in_notification, CheckInDetail};
+use checkin::{format_check_in_notification, format_user_info_summary, CheckInDetail};
 use config::{load_accounts_config, AppConfig};
 use notify::NotificationKit;
 
@@ -118,6 +118,11 @@ async fn main() {
             log::info_f(&account_name, "Logged in via username/password (cookie was missing or expired)");
         }
 
+        let user_info_summary = format_user_info_summary(runner.user_info.as_ref());
+        if let Some(summary) = user_info_summary.as_ref() {
+            log::info_f(&account_name, &format!("User info: {}", summary));
+        }
+
         if runner.success {
             success_count += 1;
             log::success(&format!("Account {}/{} [{}]: check-in SUCCEEDED", i + 1, total_count, account_name));
@@ -148,6 +153,7 @@ async fn main() {
 
             account_check_in_details.insert(account_key.clone(), CheckInDetail {
                 name: account_name.clone(),
+                user_info: user_info_summary.clone(),
                 before_quota: before.quota,
                 before_used: before.used_quota,
                 after_quota: after.quota,
@@ -164,6 +170,9 @@ async fn main() {
 
         if !runner.success {
             let mut item = format!("[FAIL] {}", account_name);
+            if let Some(summary) = user_info_summary.as_ref() {
+                item.push_str(&format!("\n👤 用户信息: {}", summary));
+            }
             if let Some(err) = runner.error.as_ref() {
                 item.push_str(&format!("\n{}", err));
             }
