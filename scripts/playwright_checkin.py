@@ -7,7 +7,7 @@ AnyRouter Playwright 签到子脚本。
 - 账号字段：name, provider, domain, login_path, sign_in_path, user_info_path,
             api_user_key, api_user, cookies(dict|str|null), username?, password?
 - 出参：向 stdout 写一行 JSON {"results": [...]}，每个账号一项
-        每项含 success, before, after, error, used_login(bool)
+        每项含 success, before, after, user_info, error, used_login(bool)
 
 设计原则：所有网络请求都走浏览器上下文（page.evaluate fetch），
 让 Chromium 自身完成 TLS 握手与 WAF 通过，规避非浏览器 client 的指纹拒绝。
@@ -65,6 +65,7 @@ class AccountResult:
     success: bool = False
     before: dict | None = None
     after: dict | None = None
+    user_info: dict | None = None
     error: str | None = None
     used_login: bool = False
     raw_sign_in: dict | None = field(default=None)
@@ -108,6 +109,50 @@ def normalize_quota(raw_quota: float | int | None, raw_used: float | int | None)
     return {"quota": quota, "used_quota": used, "raw_quota": raw_quota, "raw_used_quota": raw_used}
 
 
+SENSITIVE_USER_INFO_KEY_PARTS = (
+    "token",
+    "secret",
+    "password",
+    "passwd",
+    "cookie",
+    "session",
+    "authorization",
+    "auth",
+    "api_key",
+)
+
+
+def is_sensitive_user_info_key(key: str) -> bool:
+    lowered = key.lower()
+    return any(part in lowered for part in SENSITIVE_USER_INFO_KEY_PARTS)
+
+
+def sanitize_user_info(raw: Any) -> dict | None:
+    """保留用户信息里的可展示字段，避免把凭证类字段带到通知链路。"""
+    if not isinstance(raw, dict):
+        return None
+
+    sanitized: dict[str, Any] = {}
+    for key, value in raw.items():
+        key_text = str(key)
+        if is_sensitive_user_info_key(key_text):
+            continue
+
+        if value is None or isinstance(value, (str, int, float, bool)):
+            sanitized[key_text] = value
+        elif isinstance(value, dict):
+            nested = {
+                str(nested_key): nested_value
+                for nested_key, nested_value in value.items()
+                if not is_sensitive_user_info_key(str(nested_key))
+                and (nested_value is None or isinstance(nested_value, (str, int, float, bool)))
+            }
+            if nested:
+                sanitized[key_text] = nested
+
+    return sanitized or None
+
+
 async def fetch_in_page(page: Page, url: str, method: str, headers: dict[str, str], body: str | None = None) -> dict:
     """在页面 JS 上下文里执行 fetch，复用浏览器的 TLS 与 cookies。"""
     js = """
@@ -141,23 +186,28 @@ def build_api_headers(account: AccountInput) -> dict[str, str]:
     }
 
 
-async def call_user_info(page: Page, account: AccountInput) -> tuple[bool, dict | None, str | None]:
+async def call_user_info(page: Page, account: AccountInput) -> tuple[bool, dict | None, dict | None, str | None]:
     url = f"{account.domain}{account.user_info_path}"
     headers = build_api_headers(account)
     log(f"[{account.name}] GET {url}")
     resp = await fetch_in_page(page, url, "GET", headers, None)
     if not resp.get("ok"):
-        return False, None, f"fetch failed: {resp.get('error')}"
+        return False, None, None, f"fetch failed: {resp.get('error')}"
     if resp.get("status") != 200:
-        return False, None, f"HTTP {resp.get('status')}: {resp.get('body', '')[:200]}"
+        return False, None, None, f"HTTP {resp.get('status')}: {resp.get('body', '')[:200]}"
     try:
         data = json.loads(resp["body"])
     except json.JSONDecodeError:
-        return False, None, f"invalid JSON: {resp['body'][:200]}"
+        return False, None, None, f"invalid JSON: {resp['body'][:200]}"
     if not data.get("success"):
-        return False, None, f"server returned success=false: {data.get('message') or data}"
+        return False, None, None, f"server returned success=false: {data.get('message') or data}"
     user_data = data.get("data") or {}
-    return True, normalize_quota(user_data.get("quota"), user_data.get("used_quota")), None
+    return (
+        True,
+        normalize_quota(user_data.get("quota"), user_data.get("used_quota")),
+        sanitize_user_info(user_data),
+        None,
+    )
 
 
 async def call_sign_in(page: Page, account: AccountInput) -> tuple[bool, dict | None, str | None]:
@@ -252,9 +302,10 @@ async def process_account(context: BrowserContext, account: AccountInput, timeou
                 log(f"[{account.name}] login failed: {err}")
 
         # 签到前余额
-        ok, before, err = await call_user_info(page, account)
+        ok, before, before_user_info, err = await call_user_info(page, account)
         if ok:
             result.before = before
+            result.user_info = before_user_info
         else:
             log(f"[{account.name}] user_info(before) failed: {err}")
 
@@ -263,9 +314,10 @@ async def process_account(context: BrowserContext, account: AccountInput, timeou
         result.raw_sign_in = raw_sign
 
         # 签到后余额
-        ok2, after, err2 = await call_user_info(page, account)
+        ok2, after, after_user_info, err2 = await call_user_info(page, account)
         if ok2:
             result.after = after
+            result.user_info = after_user_info or result.user_info
 
         if account.sign_in_path:
             result.success = sign_ok
