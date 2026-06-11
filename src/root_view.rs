@@ -225,7 +225,7 @@ impl Render for RootView {
                     )
                     // 面板内容
                     .child(
-                        div().flex_1().overflow_y_scroll().p_6()
+                        div().id("content-scroll").flex_1().overflow_y_scroll().p_6()
                             .child(content)
                     )
             )

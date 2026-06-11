@@ -21,7 +21,7 @@ impl LogPanel {
 
     fn level_color(level: LogLevel) -> Hsla {
         match level {
-            LogLevel::Info => rgba(96, 165, 250, 1.0),    // blue
+            LogLevel::Info => Glass::info(),
             LogLevel::Success => Glass::success(),
             LogLevel::Warn => Glass::warning(),
             LogLevel::Error => Glass::danger(),
@@ -158,6 +158,7 @@ impl Render for LogPanel {
             // 日志终端
             .child(
                 div()
+                    .id("log-terminal")
                     .flex_1()
                     .rounded(px(12.0))
                     .bg(Glass::terminal())

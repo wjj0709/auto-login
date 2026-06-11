@@ -25,7 +25,7 @@ impl AccountPanel {
             .px_2()
             .py_0p5()
             .rounded(px(6.0))
-            .bg(rgba(0, 0, 0, 0))
+            .bg(Glass::transparent())
             .border_1()
             .border_color(color.opacity(0.3))
             .text_xs()
