@@ -1,7 +1,7 @@
 use gpui::*;
 
 use crate::app_state::AppState;
-use crate::theme::Glass;
+use crate::theme::{Glass, GlassExt};
 
 /// 余额仪表盘
 pub struct Dashboard {
@@ -17,14 +17,18 @@ impl Dashboard {
         label: &str,
         value: &str,
         color: Hsla,
+        glow: bool,
     ) -> impl IntoElement {
+        let shadow = if glow { Glass::shadow_glow(color) } else { Glass::shadow_soft() };
         div()
             .flex_1()
+            .flex().flex_col()
             .p_4()
-            .rounded(px(12.0))
-            .bg(Glass::card())
+            .bg(Glass::card_gradient())
             .border_1()
-            .border_color(Glass::border())
+            .border_color(if glow { color.opacity(0.4) } else { Glass::border_bright() })
+            .rounded(px(14.0))
+            .shadow(shadow)
             .child(
                 div().flex().flex_col().gap_1()
                     .child(
@@ -52,7 +56,7 @@ impl Dashboard {
             .py_3()
             .border_b_1()
             .border_color(Glass::border())
-            .hover(|s| s.bg(Glass::card_hover()))
+            .hover(|s| s.bg(Glass::primary().opacity(0.08)))
             .child(
                 div().flex_1().text_sm().text_color(Glass::text())
                     .child(name.to_string())
@@ -106,18 +110,15 @@ impl Render for Dashboard {
             // 统计卡片行
             .child(
                 div().flex().gap_3()
-                    .child(Self::render_stat_card("Total", &total.to_string(), Glass::text()))
-                    .child(Self::render_stat_card("Success", &success.to_string(), Glass::success()))
-                    .child(Self::render_stat_card("Failed", &failed.to_string(), Glass::danger()))
-                    .child(Self::render_stat_card("Total Reward", &format!("+${:.2}", total_reward), Glass::primary()))
+                    .child(Self::render_stat_card("Total", &total.to_string(), Glass::text(), false))
+                    .child(Self::render_stat_card("Success", &success.to_string(), Glass::success(), false))
+                    .child(Self::render_stat_card("Failed", &failed.to_string(), Glass::danger(), false))
+                    .child(Self::render_stat_card("Total Reward", &format!("+${:.2}", total_reward), Glass::primary(), true))
             )
             // 余额表格
             .child(
                 div()
-                    .rounded(px(12.0))
-                    .bg(Glass::card())
-                    .border_1()
-                    .border_color(Glass::border())
+                    .glass_panel()
                     .overflow_hidden()
                     // 表头
                     .child(
@@ -153,8 +154,11 @@ impl Render for Dashboard {
                     // 数据行
                     .child(
                         if balance_rows.is_empty() {
-                            div().p_6().text_center().text_sm().text_color(Glass::text_muted())
-                                .child("No balance data. Run check-in first.")
+                            div().flex().flex_col().items_center().justify_center().gap_2().py_10()
+                                .child(div().text_xl().text_color(Glass::text_muted().opacity(0.4)).child("○"))
+                                .child(div().text_sm().text_color(Glass::text_muted()).child("No balance data yet"))
+                                .child(div().text_xs().text_color(Glass::text_muted().opacity(0.7))
+                                    .child("Run check-in to populate the dashboard"))
                                 .into_any_element()
                         } else {
                             div().flex().flex_col()
