@@ -24,11 +24,9 @@ pub fn run_checkin_all(
     cx.spawn(async move |cx| {
         // 加载配置
         let (accounts, providers) = {
-            let state = app_state.read_with(cx, |state, _cx| {
-                (state.accounts.clone(), HashMap::new())
-            });
+            let state = app_state.read_with(cx, |state, _cx| state.accounts.clone());
             match state {
-                Ok((accounts, _)) => {
+                Ok(accounts) => {
                     let config = AppConfig::load_from_env();
                     (accounts, config.providers)
                 }

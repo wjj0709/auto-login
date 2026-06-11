@@ -17,7 +17,6 @@ impl Dashboard {
         label: &str,
         value: &str,
         color: Hsla,
-        _cx: &mut Context<Self>,
     ) -> impl IntoElement {
         div()
             .flex_1()
@@ -30,7 +29,7 @@ impl Dashboard {
                 div().flex().flex_col().gap_1()
                     .child(
                         div().text_xs().text_color(Glass::text_muted())
-                            .child(label)
+                            .child(label.to_string())
                     )
                     .child(
                         div().text_xl().font_weight(FontWeight::BOLD)
@@ -45,7 +44,6 @@ impl Dashboard {
         quota: f64,
         used: f64,
         reward: f64,
-        _cx: &mut Context<Self>,
     ) -> impl IntoElement {
         div()
             .flex()
@@ -89,7 +87,7 @@ impl Render for Dashboard {
             let name = account.get_display_name(i);
             if let Some(bal) = state.balances.get(&name) {
                 balance_rows.push(
-                    Self::render_balance_row(&name, bal.quota, bal.used_quota, bal.reward, cx)
+                    Self::render_balance_row(&name, bal.quota, bal.used_quota, bal.reward)
                         .into_any_element()
                 );
             }
@@ -108,10 +106,10 @@ impl Render for Dashboard {
             // 统计卡片行
             .child(
                 div().flex().gap_3()
-                    .child(Self::render_stat_card("Total", &total.to_string(), Glass::text(), cx))
-                    .child(Self::render_stat_card("Success", &success.to_string(), Glass::success(), cx))
-                    .child(Self::render_stat_card("Failed", &failed.to_string(), Glass::danger(), cx))
-                    .child(Self::render_stat_card("Total Reward", &format!("+${:.2}", total_reward), Glass::primary(), cx))
+                    .child(Self::render_stat_card("Total", &total.to_string(), Glass::text()))
+                    .child(Self::render_stat_card("Success", &success.to_string(), Glass::success()))
+                    .child(Self::render_stat_card("Failed", &failed.to_string(), Glass::danger()))
+                    .child(Self::render_stat_card("Total Reward", &format!("+${:.2}", total_reward), Glass::primary()))
             )
             // 余额表格
             .child(

@@ -62,7 +62,7 @@ impl LogPanel {
                 this.filter = target;
                 cx.notify();
             }))
-            .child(label)
+            .child(label.to_string())
     }
 }
 
