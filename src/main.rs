@@ -39,27 +39,23 @@ fn main() {
         let app_state = cx.new(|_cx| AppState::new(accounts));
 
         // 打开主窗口
-        cx.spawn(async move |cx| {
-            let bounds = Bounds::centered(None, size(px(1100.0), px(700.0)), cx);
+        let bounds = Bounds::centered(None, size(px(1100.0), px(700.0)), cx);
 
-            let window_options = WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                titlebar: Some(TitlebarOptions {
-                    title: Some(SharedString::from("AnyRouter Auto Check-in")),
-                    appears_transparent: false,
-                    ..Default::default()
-                }),
-                window_background: WindowBackgroundAppearance::Blurred,
+        let window_options = WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            titlebar: Some(TitlebarOptions {
+                title: Some(SharedString::from("AnyRouter Auto Check-in")),
+                appears_transparent: false,
                 ..Default::default()
-            };
+            }),
+            window_background: WindowBackgroundAppearance::Blurred,
+            ..Default::default()
+        };
 
-            cx.open_window(window_options, |window, cx| {
-                let view = cx.new(|cx| RootView::new(app_state, window, cx));
-                cx.new(|cx| gpui_component::Root::new(view, window, cx))
-            })?;
-
-            Ok::<_, anyhow::Error>(())
+        cx.open_window(window_options, |window, cx| {
+            let view = cx.new(|cx| RootView::new(app_state, window, cx));
+            cx.new(|cx| gpui_component::Root::new(view, window, cx))
         })
-        .detach();
+        .expect("无法打开主窗口");
     });
 }
