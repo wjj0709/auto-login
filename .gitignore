@@ -1,6 +1,8 @@
 .idea
+.qoder
 .vscode
 
+.cargo-local
 # 构建数据
 target
 
