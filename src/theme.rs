@@ -44,7 +44,6 @@ pub fn abyss_glass_theme_color() -> ThemeColor {
 
     // === 基础色彩 ===
     let base_bg = rgba(10, 10, 15, 1.0);          // #0a0a0f 近纯黑
-    let panel_bg = rgba(15, 15, 25, 0.75);         // 半透明深黑
     let card_bg = rgba(25, 25, 40, 0.6);           // 玻璃层
     let border_color = rgba(100, 100, 140, 0.15);  // 微光边
     let primary = rgba(99, 102, 241, 1.0);          // #6366f1 靛蓝紫
@@ -68,12 +67,11 @@ pub fn abyss_glass_theme_color() -> ThemeColor {
     colors.secondary_foreground = text_primary;
 
     colors.accent = rgba(99, 102, 241, 0.15);
-    colors.accent_hover = rgba(99, 102, 241, 0.25);
     colors.accent_foreground = primary;
 
-    colors.destructive = danger;
-    colors.destructive_hover = rgba(220, 50, 50, 1.0);
-    colors.destructive_foreground = rgba(255, 255, 255, 1.0);
+    colors.danger = danger;
+    colors.danger_hover = rgba(220, 50, 50, 1.0);
+    colors.danger_foreground = rgba(255, 255, 255, 1.0);
 
     colors.muted = rgba(30, 30, 45, 0.5);
     colors.muted_foreground = text_muted;
@@ -83,9 +81,7 @@ pub fn abyss_glass_theme_color() -> ThemeColor {
     colors.input = rgba(20, 20, 35, 0.8);
     colors.selection = rgba(99, 102, 241, 0.3);
 
-    // 卡片/面板
-    colors.card = panel_bg;
-    colors.card_foreground = text_primary;
+    // 弹出层 (Popover)
     colors.popover = rgba(20, 20, 35, 0.95);
     colors.popover_foreground = text_primary;
 
@@ -147,6 +143,8 @@ impl Glass {
     pub fn danger() -> Hsla { rgba(239, 68, 68, 1.0) }
     /// 警告色 #eab308
     pub fn warning() -> Hsla { rgba(234, 179, 8, 1.0) }
+    /// 信息蓝 #60a5fa
+    pub fn info() -> Hsla { rgba(96, 165, 250, 1.0) }
     /// 主文字 #e2e8f0
     pub fn text() -> Hsla { rgba(226, 232, 240, 1.0) }
     /// 次文字 #94a3b8
