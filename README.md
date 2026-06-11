@@ -1,18 +1,18 @@
-# AnyRouter 自动签到工具 (Rust 版)
+# AnyRouter 自动签到工具 (Rust + Playwright)
 
-基于 Rust + Tokio 异步运行时的高性能自动签到工具，支持 AnyRouter.top / AgentRouter.org 等多站点多账号批量签到，内置 WAF JS Challenge 自动解决能力。
+基于 Rust + Tokio 的多站点多账号自动签到工具。**所有 HTTP 流量都通过真实 Chromium 浏览器（Playwright）发起**，规避 anyrouter.top / agentrouter.org 这类站点的 TLS 指纹拒绝（JA3）和 WAF JS Challenge。
 
 ---
 
 ## ✨ 功能特性
 
 - **多站点支持** — 内置 AnyRouter.top 和 AgentRouter.org 站点配置，支持通过环境变量自定义扩展
-- **多账号批量签到** — 支持配置多个账号，自动依次签到
-- **WAF Challenge 自动解决** — 通过 Node.js 执行 acw_sc__v2 JS Challenge，无需手动处理反爬拦截
+- **多账号批量签到** — 一次浏览器会话内串行处理所有账号
+- **真实浏览器 TLS** — Playwright + Chromium 提供与真人一致的 TLS 握手与 WAF cookie 流转，无需自行解码 `acw_sc__v2`
+- **双登录方式** — 已有 `cookies` 时直接注入；提供 `username` + `password` 时浏览器自动登录获取新 cookie
 - **余额变化检测** — 基于 SHA-256 快照比对，精准检测签到前后余额变动
-- **邮件通知** — 签到失败或余额变动时自动发送 SMTP 邮件通知
-- **敏感信息脱敏** — 日志输出自动对 Cookie、密码等敏感字段进行脱敏处理
-- **高性能** — 全异步架构（Tokio），总执行时间 < 2 秒
+- **邮件通知** — 签到失败或余额变动时自动发送 SMTP 邮件
+- **敏感信息脱敏** — 日志输出自动对 Cookie、密码等敏感字段进行脱敏
 
 ---
 
@@ -20,11 +20,9 @@
 
 | 组件 | 技术 |
 |------|------|
-| 语言 | Rust (Edition 2021) |
-| 异步运行时 | Tokio |
-| HTTP 客户端 | reqwest (native-tls) |
-| JS 引擎 | Node.js (系统安装) |
-| 序列化 | serde + serde_json |
+| 主程序 | Rust (Edition 2021) + Tokio |
+| 浏览器自动化 | Python 3.9+ + Playwright (Chromium) |
+| 序列化 | serde / serde_json |
 | 配置加载 | dotenvy |
 | 邮件发送 | lettre |
 | 哈希计算 | sha2 |
@@ -35,153 +33,128 @@
 
 ```
 src/
-├── main.rs       # 主程序入口，四阶段流水线编排
-├── config.rs     # 配置管理：Provider 与账号解析
-├── checkin.rs    # 签到核心逻辑：用户信息获取 + 签到 + 余额查询
-├── waf.rs        # WAF JS Challenge 解决模块（Node.js 方案）
-├── balance.rs    # 余额快照 Hash 比对
-├── notify.rs     # SMTP 邮件通知
-└── log.rs        # 统一日志格式输出
+├── main.rs          # 主程序入口
+├── config.rs        # 配置：Provider 与账号解析
+├── playwright.rs    # 调用 Playwright 子进程
+├── checkin.rs       # 通知文案格式化
+├── balance.rs       # 余额快照 hash
+├── notify.rs        # SMTP 邮件
+└── log.rs           # 日志
+scripts/
+└── playwright_checkin.py   # Playwright 全流程签到脚本
 ```
 
 ---
 
-## ⚙️ 配置说明
+## 🚀 安装与使用
 
-### 1. 创建 `.env` 文件
+### 1. 安装依赖
 
-参考 `.env.example` 创建配置文件：
+```bash
+# Rust 主程序依赖
+cargo build --release
+
+# Playwright（Python 3.9+）
+pip3 install playwright
+python3 -m playwright install chromium
+```
+
+> 如果你的系统 Python 受限（例如 macOS 自带 Python），建议使用 venv：
+> ```bash
+> python3 -m venv .venv && source .venv/bin/activate
+> pip install playwright && playwright install chromium
+> # 然后在 .env 里设置 PYTHON_BIN=.venv/bin/python3
+> ```
+
+### 2. 编辑 `.env`
 
 ```env
-# 账号配置（JSON 数组，必须用双引号包裹并转义内部双引号）
-ANYROUTER_ACCOUNTS="[{\"cookies\":{\"session\":\"你的session值\"},\"api_user\":\"你的api_user值\"}]"
+# 账号配置：JSON 数组（必须双引号包裹并转义）
+# 字段：cookies(必填)、api_user(必填)、provider(可选)、name(可选)
+#       _username / _password (可选；当 cookies 失效时由浏览器自动登录)
+ANYROUTER_ACCOUNTS="[{\"cookies\":{\"session\":\"xxx\"},\"api_user\":\"148714\",\"name\":\"账号A\"}]"
 
 # 可选：自定义 Provider
 # PROVIDERS={"custom":{"domain":"https://example.com","sign_in_path":"/api/user/sign_in"}}
+
+# 可选：Playwright 调试 — 显示真实窗口
+# PLAYWRIGHT_HEADLESS=false
+
+# 可选：自定义 Python 解释器路径
+# PYTHON_BIN=.venv/bin/python3
+
+# 可选：自定义 Playwright 脚本路径
+# PLAYWRIGHT_SCRIPT=scripts/playwright_checkin.py
 
 # 可选：邮件通知
 # EMAIL_USER=your_email@example.com
 # EMAIL_PASS=your_password
 # EMAIL_TO=recipient@example.com
-# EMAIL_SENDER=
-# CUSTOM_SMTP_SERVER=
 ```
 
-### 2. 账号字段说明
+#### 账号字段
 
 | 字段 | 必填 | 说明 |
 |------|------|------|
 | `cookies` | 是 | JSON 对象 `{"session":"xxx"}` 或字符串 `"session=xxx"` |
-| `api_user` | 是 | API 用户标识 |
+| `api_user` | 是 | `new-api-user` header 的值 |
 | `provider` | 否 | 站点名称，默认 `anyrouter` |
-| `name` | 否 | 账号别名，用于日志显示 |
+| `name` | 否 | 账号别名，用于日志/通知显示 |
+| `_username` | 否 | 账户名；当 cookie 失效时浏览器会自动登录 |
+| `_password` | 否 | 账户密码；和 `_username` 配对使用 |
 
-### 3. 多账号示例
+> 也可通过 `ANYROUTER_USERNAME_<n>` / `ANYROUTER_PASSWORD_<n>` 形式按账号序号注入凭证（避免写在 JSON 里）。
 
-```env
-ANYROUTER_ACCOUNTS="[{\"cookies\":{\"session\":\"aaa\"},\"api_user\":\"111\",\"name\":\"账号A\"},{\"cookies\":{\"session\":\"bbb\"},\"api_user\":\"222\",\"provider\":\"agentrouter\",\"name\":\"账号B\"}]"
-```
-
----
-
-## 🚀 使用方法
-
-### 前置要求
-
-- **Rust** ≥ 1.70（用于编译）
-- **Node.js** ≥ 18（用于执行 WAF JS Challenge）
-
-### 编译运行
+### 3. 运行
 
 ```bash
-# 克隆项目
-git clone <repo-url>
-cd rust-version
-
-# 复制并编辑配置
-cp .env.example .env
-# 编辑 .env 填入账号信息
-
-# 编译（Release 模式）
-cargo build --release
-
-# 运行
 cargo run --release
-```
-
-### 直接运行编译产物
-
-```bash
-./target/release/anyrouter-checkin.exe
+# 或
+./target/release/anyrouter-checkin
 ```
 
 ---
 
 ## 🔄 执行流程
 
-程序按以下四阶段流水线执行：
-
 ```
-阶段 1: 加载配置
+阶段 1: 加载 .env / Provider / 账号
     ↓
-阶段 1.5: 解决 WAF Challenge（仅对有手动签到的 Provider）
-    ↓
-阶段 2: 批量执行签到（逐账号处理）
-    ├── Step 1: 获取签到前用户信息（余额基准）
-    ├── Step 2: 执行签到 API
-    └── Step 3: 获取签到后用户信息（余额比对）
+阶段 2: 启动 Chromium 子进程（Playwright），逐账号：
+    ├── 注入用户 cookies（如有）
+    ├── goto domain → 浏览器拿到 WAF cookie
+    ├── 若无 session 但提供账密 → 走 /api/user/login 登录
+    ├── page.evaluate(fetch) 调用 /api/user/self（签到前余额）
+    ├── page.evaluate(fetch) 调用 /api/user/sign_in（签到）
+    └── page.evaluate(fetch) 调用 /api/user/self（签到后余额）
     ↓
 阶段 3: 余额变化检测（SHA-256 快照比对）
     ↓
-阶段 4: 发送通知（失败/余额变动时触发）
+阶段 4: 发送通知（失败 / 余额变动时触发）
 ```
+
+**关键点**：所有目标站点的 HTTP 请求都用 `page.evaluate(fetch)` 在 Chromium 上下文里执行，复用浏览器的 TLS、cookies 和 UA — 这是绕过站点 JA3 指纹检测的唯一可靠方式。
 
 ---
 
-## 🛡️ WAF Challenge 解决方案
+## 🐛 故障排查
 
-AnyRouter.top 部署了 `acw_sc__v2` WAF JS Challenge，程序通过以下方式自动解决：
-
-1. **获取 Challenge** — 向签到 API 发送请求，获取包含 JS Challenge 的 HTML 页面
-2. **提取 JS** — 解析 `<script>` 标签内的 Challenge 脚本
-3. **注入 DOM Stub** — 为 `document.cookie` 添加 setter 拦截，捕获计算出的 cookie 值
-4. **Node.js 执行** — 调用系统 Node.js 运行修改后的 JS，提取 `acw_sc__v2` cookie
-5. **合并 Cookie** — 将 WAF cookie 注入后续所有 API 请求
-
-> ⚠️ 系统需安装 Node.js（v18+），这是执行 WAF JS 的必要依赖
-
----
-
-## 📊 输出示例
-
-```
-────────────────────────────────────────────────
-[PHASE] AnyRouter Auto Check-in Script (Rust)
-────────────────────────────────────────────────
-[PHASE] Phase 1: Loading Configuration
-[SUCCESS] Configuration loaded: 2 provider(s), 1 account(s)
-
-[PHASE] Phase 1.5: Solving WAF Challenge
-[SUCCESS] [anyrouter] WAF challenge solved! acw_sc__v2=6a29f8bf... (40 chars) in 658ms
-
-[PHASE] Phase 2: Processing 1 Account(s)
-[SUCCESS] [Account 1] Check-in successful!
-
-[PHASE] Final Summary
-[INFO] Total accounts: 1
-[INFO] Successful:     1/1
-[INFO] Failed:         0/1
-[SUCCESS] Program exited with code 0 (success)
-```
+| 现象 | 原因 / 解决 |
+|------|-------------|
+| `playwright_not_installed` | `pip3 install playwright && python3 -m playwright install chromium` |
+| `Failed to spawn python subprocess` | 检查 `PYTHON_BIN` 是否正确，或确认 `python3` 在 PATH |
+| `login rejected` | `_username` / `_password` 错误，或站点开了图形验证码（需手动登录刷新 cookie） |
+| `sign_in failed: 已经签到过` | 实际算成功，无需处理 |
+| 想看浏览器窗口 | `.env` 里设 `PLAYWRIGHT_HEADLESS=false` 重跑 |
 
 ---
 
 ## 📝 注意事项
 
-- `.env` 中 JSON 值**必须用双引号包裹**，内部双引号用 `\"` 转义，否则 dotenvy 会解析失败
-- `session` cookie 有效期有限，过期后需重新获取并更新 `.env`
-- WAF Challenge 每次请求的 `arg1` 不同，程序每次运行都会重新计算
-- 邮件通知仅在签到失败或余额发生变化时发送，全部成功时不发送
+- `.env` 中 JSON 值**必须用双引号包裹**，内部双引号用 `\"` 转义，否则 dotenvy 解析失败
+- `session` cookie 一般几天到几周过期；过期后只要在 `.env` 里同时配置 `_username` + `_password`，浏览器会自动登录拿新 cookie，无需手动维护
+- 邮件通知仅在签到失败或余额发生变化时发送，全部成功且无变化时不发送
+- 站点反爬策略可能调整，若 Chromium 也被拦，请参考 `scripts/playwright_checkin.py` 调整 UA / 浏览器参数
 
 ---
 
