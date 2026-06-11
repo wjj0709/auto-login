@@ -1,6 +1,7 @@
 use chrono::Local;
 
 /// 日志级别
+#[allow(dead_code)]
 enum Level {
     Info,
     Success,
@@ -52,6 +53,7 @@ pub fn success(msg: &str) { log(Level::Success, msg); }
 pub fn success_f(prefix: &str, msg: &str) { log_with_prefix(Level::Success, prefix, msg); }
 
 pub fn warn(msg: &str) { log(Level::Warn, msg); }
+#[allow(dead_code)]
 pub fn warn_f(prefix: &str, msg: &str) { log_with_prefix(Level::Warn, prefix, msg); }
 
 pub fn error(msg: &str) { log(Level::Error, msg); }
@@ -62,6 +64,7 @@ pub fn debug_f(prefix: &str, msg: &str) { log_with_prefix(Level::Debug, prefix, 
 
 pub fn system(msg: &str) { log(Level::System, msg); }
 
+#[allow(dead_code)]
 pub fn network(prefix: &str, msg: &str) { log_with_prefix(Level::Network, prefix, msg); }
 
 #[allow(dead_code)]

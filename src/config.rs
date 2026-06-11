@@ -24,6 +24,7 @@ fn default_user_info_path() -> String { "/api/user/self".to_string() }
 fn default_api_user_key() -> String { "new-api-user".to_string() }
 
 impl ProviderConfig {
+    #[allow(dead_code)]
     pub fn needs_manual_check_in(&self) -> bool {
         self.sign_in_path.is_some()
     }
@@ -109,6 +110,7 @@ impl AppConfig {
         Self { providers }
     }
 
+    #[allow(dead_code)]
     pub fn get_provider(&self, name: &str) -> Option<&ProviderConfig> {
         self.providers.get(name)
     }
