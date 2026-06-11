@@ -1,4 +1,4 @@
-use gpui::Hsla;
+use gpui::{Background, BoxShadow, Hsla, Styled, linear_color_stop, linear_gradient, point, px};
 use gpui_component::theme::ThemeColor;
 use gpui_component::Theme;
 
@@ -153,4 +153,85 @@ impl Glass {
     pub fn text_muted() -> Hsla { rgba(100, 116, 139, 1.0) }
     /// 透明背景
     pub fn transparent() -> Hsla { Hsla { h: 0.0, s: 0.0, l: 0.0, a: 0.0 } }
+
+    // === 玻璃质感：阴影与渐变 ===
+
+    /// 卡片柔光投影（深色，营造悬浮玻璃感）
+    pub fn shadow_soft() -> Vec<BoxShadow> {
+        vec![BoxShadow {
+            color: rgba(0, 0, 0, 0.45),
+            offset: point(px(0.0), px(6.0)),
+            blur_radius: px(20.0),
+            spread_radius: px(0.0),
+        }]
+    }
+
+    /// 纯主色辉光（按钮 / 头像 / 激活项背后的霓虹感）
+    pub fn glow(color: Hsla) -> Vec<BoxShadow> {
+        vec![BoxShadow {
+            color: color.opacity(0.35),
+            offset: point(px(0.0), px(0.0)),
+            blur_radius: px(18.0),
+            spread_radius: px(0.0),
+        }]
+    }
+
+    /// 柔光投影 + 主色辉光组合（用于激活 / 悬停的卡片）
+    pub fn shadow_glow(color: Hsla) -> Vec<BoxShadow> {
+        vec![
+            BoxShadow {
+                color: rgba(0, 0, 0, 0.40),
+                offset: point(px(0.0), px(6.0)),
+                blur_radius: px(18.0),
+                spread_radius: px(0.0),
+            },
+            BoxShadow {
+                color: color.opacity(0.28),
+                offset: point(px(0.0), px(0.0)),
+                blur_radius: px(22.0),
+                spread_radius: px(0.0),
+            },
+        ]
+    }
+
+    /// 卡片渐变玻璃背景（上浅下深的磨砂质感）
+    pub fn card_gradient() -> Background {
+        linear_gradient(
+            180.0,
+            linear_color_stop(rgba(42, 42, 62, 0.55), 0.0),
+            linear_color_stop(rgba(22, 22, 34, 0.55), 1.0),
+        )
+    }
+
+    /// 面板渐变玻璃背景（比卡片更深）
+    pub fn panel_gradient() -> Background {
+        linear_gradient(
+            180.0,
+            linear_color_stop(rgba(24, 24, 36, 0.72), 0.0),
+            linear_color_stop(rgba(13, 13, 21, 0.72), 1.0),
+        )
+    }
 }
+
+/// 玻璃质感样式扩展：一行调用即可套用统一的卡片 / 面板玻璃外观
+pub trait GlassExt: Styled + Sized {
+    /// 玻璃卡片：渐变背景 + 提亮描边 + 圆角 + 柔光投影
+    fn glass_card(self) -> Self {
+        self.bg(Glass::card_gradient())
+            .border_1()
+            .border_color(Glass::border_bright())
+            .rounded(px(14.0))
+            .shadow(Glass::shadow_soft())
+    }
+
+    /// 玻璃面板：更深的渐变 + 圆角 + 柔光投影
+    fn glass_panel(self) -> Self {
+        self.bg(Glass::panel_gradient())
+            .border_1()
+            .border_color(Glass::border())
+            .rounded(px(16.0))
+            .shadow(Glass::shadow_soft())
+    }
+}
+
+impl<E: Styled> GlassExt for E {}
