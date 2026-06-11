@@ -1,7 +1,7 @@
 use gpui::*;
 
 use crate::app_state::{AppState, CheckInStatus};
-use crate::theme::Glass;
+use crate::theme::{Glass, GlassExt};
 
 /// 账号管理面板
 pub struct AccountPanel {
@@ -22,15 +22,17 @@ impl AccountPanel {
         };
 
         div()
+            .flex().items_center().gap_1()
             .px_2()
             .py_0p5()
             .rounded(px(6.0))
-            .bg(Glass::transparent())
+            .bg(color.opacity(0.12))
             .border_1()
-            .border_color(color.opacity(0.3))
+            .border_color(color.opacity(0.35))
             .text_xs()
             .font_weight(FontWeight::MEDIUM)
             .text_color(color)
+            .child(div().w(px(6.0)).h(px(6.0)).rounded(px(3.0)).bg(color))
             .child(text)
     }
 
@@ -42,12 +44,13 @@ impl AccountPanel {
         balance: Option<&crate::app_state::BalanceInfo>,
     ) -> impl IntoElement {
         div()
+            .flex().flex_col()
             .p_4()
-            .rounded(px(12.0))
-            .bg(Glass::card())
-            .border_1()
-            .border_color(Glass::border())
-            .hover(|s| s.border_color(Glass::border_bright()).bg(Glass::card_hover()))
+            .glass_card()
+            .hover(|s| {
+                s.border_color(Glass::primary().opacity(0.5))
+                    .shadow(Glass::shadow_glow(Glass::primary()))
+            })
             .child(
                 // 头部: 名称 + 状态
                 div().flex().items_center().justify_between().mb_3()
@@ -55,7 +58,9 @@ impl AccountPanel {
                         div().flex().items_center().gap_2()
                             .child(
                                 div().w(px(32.0)).h(px(32.0)).rounded(px(8.0))
-                                    .bg(Glass::primary().opacity(0.15))
+                                    .bg(Glass::primary().opacity(0.18))
+                                    .border_1().border_color(Glass::primary().opacity(0.4))
+                                    .shadow(Glass::glow(Glass::primary()))
                                     .flex().items_center().justify_center()
                                     .text_color(Glass::primary())
                                     .text_sm().font_weight(FontWeight::BOLD)
@@ -102,7 +107,7 @@ impl AccountPanel {
                         .into_any_element()
                 } else {
                     div().pt_2().border_t_1().border_color(Glass::border())
-                        .text_xs().text_color(Glass::text_muted())
+                        .text_xs().text_color(Glass::text_muted().opacity(0.8))
                         .child("No balance data")
                         .into_any_element()
                 }
