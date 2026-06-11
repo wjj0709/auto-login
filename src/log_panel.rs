@@ -55,9 +55,12 @@ impl LogPanel {
             .rounded(px(6.0))
             .cursor_pointer()
             .bg(if is_active { Glass::primary().opacity(0.2) } else { Glass::transparent() })
+            .border_1()
+            .border_color(if is_active { Glass::primary().opacity(0.45) } else { Glass::transparent() })
+            .shadow(if is_active { Glass::glow(Glass::primary()) } else { Vec::new() })
             .text_xs()
             .text_color(if is_active { Glass::primary() } else { Glass::text_muted() })
-            .hover(|s| s.bg(Glass::card_hover()))
+            .hover(|s| s.bg(Glass::primary().opacity(0.12)))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.filter = target;
                 cx.notify();
@@ -86,7 +89,7 @@ impl Render for LogPanel {
                     .gap_2()
                     .py(px(2.0))
                     .px_3()
-                    .hover(|s| s.bg(hsla(0.0, 0.0, 1.0, 0.02)))
+                    .hover(|s| s.bg(Glass::primary().opacity(0.06)))
                     .child(
                         div().text_xs().w(px(70.0)).flex_shrink_0()
                             .text_color(Glass::text_muted())
@@ -160,16 +163,20 @@ impl Render for LogPanel {
                 div()
                     .id("log-terminal")
                     .flex_1()
-                    .rounded(px(12.0))
+                    .rounded(px(14.0))
                     .bg(Glass::terminal())
                     .border_1()
-                    .border_color(Glass::border())
+                    .border_color(Glass::border_bright())
+                    .shadow(Glass::shadow_soft())
                     .overflow_y_scroll()
                     .py_2()
                     .child(
                         if log_elements.is_empty() {
-                            div().p_4().text_sm().text_color(Glass::text_muted())
-                                .child("No log entries yet. Click 'Check-in All' to start.")
+                            div().flex().flex_col().items_center().justify_center().gap_2().py_10().size_full()
+                                .child(div().text_xl().text_color(Glass::text_muted().opacity(0.4)).child("›_"))
+                                .child(div().text_sm().text_color(Glass::text_muted()).child("No log entries yet"))
+                                .child(div().text_xs().text_color(Glass::text_muted().opacity(0.7))
+                                    .child("Click 'Check-in All' to start"))
                                 .into_any_element()
                         } else {
                             div().flex().flex_col()
