@@ -76,7 +76,6 @@ impl Render for LogPanel {
             .filter(|entry| self.filter.map_or(true, |f| entry.level == f))
             .collect();
         let log_count = state.logs.len();
-        let filter = self.filter;
 
         let mut log_elements = Vec::new();
         for entry in &logs {

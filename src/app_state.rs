@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use gpui::{App, Entity, SharedString};
+use gpui::SharedString;
 use chrono::Local;
 
 use crate::config::AccountConfig;

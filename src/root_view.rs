@@ -6,7 +6,7 @@ use gpui_component::Disableable;
 use gpui_component::TitleBar;
 use gpui_component::{Icon, IconName};
 
-use crate::app_state::{AppState, ActivePanel, LogLevel};
+use crate::app_state::{AppState, ActivePanel};
 use crate::theme::Glass;
 use crate::account_panel::AccountPanel;
 use crate::log_panel::LogPanel;
@@ -56,7 +56,7 @@ pub struct RootView {
 }
 
 impl RootView {
-    pub fn new(app_state: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(app_state: Entity<AppState>, _window: &mut Window, cx: &mut Context<Self>) -> Self {
         let account_panel = cx.new(|cx| AccountPanel::new(app_state.clone(), cx));
         let log_panel = cx.new(|_| LogPanel::new(app_state.clone()));
         let dashboard = cx.new(|_| Dashboard::new(app_state.clone()));

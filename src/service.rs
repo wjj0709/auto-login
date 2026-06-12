@@ -1,8 +1,8 @@
 use std::collections::HashMap;
-use gpui::{App, Entity, WeakEntity};
+use gpui::{App, WeakEntity};
 
 use crate::app_state::{AppState, CheckInStatus, LogLevel};
-use crate::config::{AccountConfig, AppConfig};
+use crate::config::AppConfig;
 use crate::playwright;
 
 /// 触发全量签到（异步执行）
