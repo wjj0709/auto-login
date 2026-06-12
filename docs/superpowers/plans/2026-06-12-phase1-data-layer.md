@@ -219,14 +219,19 @@ mod tests {
     fn migrate_creates_tables_and_version() {
         let s = test_storage();
         assert_eq!(s.get_meta("schema_version").unwrap().as_deref(), Some("1"));
-        // 四张表都应存在(查询不报错)
-        for table in ["sites", "accounts", "account_cache", "meta"] {
+        // 业务三表为空;meta 表已含 schema_version 一行
+        for table in ["sites", "accounts", "account_cache"] {
             let n: i64 = s
                 .conn
                 .query_row(&format!("SELECT COUNT(*) FROM {}", table), [], |r| r.get(0))
                 .unwrap();
             assert_eq!(n, 0, "{} 应为空表", table);
         }
+        let meta_rows: i64 = s
+            .conn
+            .query_row("SELECT COUNT(*) FROM meta", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(meta_rows, 1);
     }
 
     #[test]
