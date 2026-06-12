@@ -4,6 +4,7 @@ mod assets;
 mod balance;
 mod checkin;
 mod config;
+mod crypto;
 mod dashboard;
 mod log;
 mod log_panel;
