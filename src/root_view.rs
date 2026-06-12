@@ -4,6 +4,7 @@ use gpui::*;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::Disableable;
 use gpui_component::TitleBar;
+use gpui_component::{Icon, IconName};
 
 use crate::app_state::{AppState, ActivePanel, LogLevel};
 use crate::theme::Glass;
@@ -29,11 +30,11 @@ impl NavItem {
         }
     }
 
-    fn icon(&self) -> &'static str {
+    fn icon(&self) -> IconName {
         match self {
-            NavItem::Accounts => "Users",
-            NavItem::Logs => "Terminal",
-            NavItem::Dashboard => "BarChart",
+            NavItem::Accounts => IconName::User,
+            NavItem::Logs => IconName::SquareTerminal,
+            NavItem::Dashboard => IconName::LayoutDashboard,
         }
     }
 
@@ -167,6 +168,7 @@ impl RootView {
                 div().w(px(3.0)).h(px(14.0)).rounded(px(2.0))
                     .bg(if is_active { Glass::primary() } else { Glass::transparent() })
             )
+            .child(Icon::new(item.icon()).size_4())
             .child(
                 div().text_sm().font_weight(FontWeight::MEDIUM)
                     .child(item.label())
