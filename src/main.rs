@@ -45,11 +45,8 @@ fn main() {
 
         let window_options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
-            titlebar: Some(TitlebarOptions {
-                title: Some(SharedString::from("AnyRouter Auto Check-in")),
-                appears_transparent: false,
-                ..Default::default()
-            }),
+            // 使用 gpui-component 的标题栏选项（透明化原生标题栏，由自定义标题栏接管）
+            titlebar: Some(gpui_component::TitleBar::title_bar_options()),
             window_background: WindowBackgroundAppearance::Blurred,
             ..Default::default()
         };

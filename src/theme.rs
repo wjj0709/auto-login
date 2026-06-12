@@ -64,6 +64,7 @@ pub fn abyss_glass_theme_color() -> ThemeColor {
 
     colors.secondary = card_bg;
     colors.secondary_hover = rgba(35, 35, 55, 0.7);
+    colors.secondary_active = rgba(45, 45, 70, 0.8);
     colors.secondary_foreground = text_primary;
 
     colors.accent = rgba(99, 102, 241, 0.15);
@@ -71,6 +72,7 @@ pub fn abyss_glass_theme_color() -> ThemeColor {
 
     colors.danger = danger;
     colors.danger_hover = rgba(220, 50, 50, 1.0);
+    colors.danger_active = rgba(200, 40, 40, 1.0);
     colors.danger_foreground = rgba(255, 255, 255, 1.0);
 
     colors.muted = rgba(30, 30, 45, 0.5);
@@ -99,6 +101,10 @@ pub fn abyss_glass_theme_color() -> ThemeColor {
     colors.tab_foreground = text_secondary;
     colors.tab_active = rgba(99, 102, 241, 0.2);
     colors.tab_active_foreground = primary;
+
+    // 标题栏（自定义深邃黑玻璃标题栏）
+    colors.title_bar = rgba(13, 13, 21, 0.85);
+    colors.title_bar_border = border_color;
 
     // 图表色板
     colors.chart_1 = primary;

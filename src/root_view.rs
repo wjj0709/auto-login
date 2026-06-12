@@ -3,6 +3,7 @@ use std::time::Duration;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::Disableable;
+use gpui_component::TitleBar;
 
 use crate::app_state::{AppState, ActivePanel, LogLevel};
 use crate::theme::Glass;
@@ -97,6 +98,44 @@ impl RootView {
         }
     }
 
+    /// 自定义标题栏：左侧品牌标识，右侧由 TitleBar 自动渲染最小化/最大化/关闭按钮
+    fn render_title_bar() -> impl IntoElement {
+        TitleBar::new().child(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(
+                    div()
+                        .w(px(18.0))
+                        .h(px(18.0))
+                        .rounded(px(5.0))
+                        .bg(Glass::primary())
+                        .shadow(Glass::glow(Glass::primary()))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_color(hsla(0.0, 0.0, 1.0, 1.0))
+                        .text_xs()
+                        .font_weight(FontWeight::BOLD)
+                        .child("A"),
+                )
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(Glass::text())
+                        .child("AnyRouter"),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(Glass::text_muted())
+                        .child("Auto Check-in"),
+                ),
+        )
+    }
+
     fn render_nav_item(
         &self,
         item: NavItem,
@@ -151,126 +190,102 @@ impl Render for RootView {
 
         div()
             .flex()
+            .flex_col()
             .size_full()
             .bg(hsla(0.0, 0.0, 0.04, 1.0))
-            // 侧边栏
+            // 自定义标题栏
+            .child(Self::render_title_bar())
+            // 主体区域：侧边栏 + 内容
             .child(
                 div()
-                    .w(px(200.0))
-                    .h_full()
                     .flex()
-                    .flex_col()
-                    .bg(Glass::sidebar())
-                    .border_r_1()
-                    .border_color(Glass::border())
-                    .py_4()
-                    .px_3()
-                    .gap_1()
-                    // 应用标题
+                    .flex_1()
+                    .overflow_hidden()
+                    // 侧边栏
                     .child(
                         div()
+                            .w(px(200.0))
+                            .h_full()
                             .flex()
-                            .items_center()
-                            .gap_2()
-                            .px_3()
-                            .pb_4()
-                            .mb_2()
-                            .border_b_1()
+                            .flex_col()
+                            .bg(Glass::sidebar())
+                            .border_r_1()
                             .border_color(Glass::border())
+                            .py_4()
+                            .px_3()
+                            .gap_1()
+                            // 导航项
+                            .child(self.render_nav_item(NavItem::Accounts, active_panel, cx))
+                            .child(self.render_nav_item(NavItem::Logs, active_panel, cx))
+                            .child(self.render_nav_item(NavItem::Dashboard, active_panel, cx))
+                            // 弹性空白
+                            .child(div().flex_grow())
+                            // 底部状态
                             .child(
-                                div().w(px(30.0)).h(px(30.0)).rounded(px(8.0))
-                                    .bg(Glass::primary())
-                                    .shadow(Glass::glow(Glass::primary()))
-                                    .flex().items_center().justify_center()
-                                    .text_color(hsla(0.0, 0.0, 1.0, 1.0))
-                                    .text_sm().font_weight(FontWeight::BOLD)
-                                    .child("A")
-                            )
-                            .child(
-                                div().flex().flex_col()
-                                    .child(
-                                        div().text_base().font_weight(FontWeight::BOLD)
-                                            .text_color(Glass::primary())
-                                            .child("AnyRouter")
-                                    )
+                                div()
+                                    .px_3()
+                                    .pt_3()
+                                    .border_t_1()
+                                    .border_color(Glass::border())
                                     .child(
                                         div().text_xs()
                                             .text_color(Glass::text_muted())
-                                            .child("Auto Check-in")
+                                            .child(format!("v0.1.0 | {} accounts", total))
                                     )
                             )
                     )
-                    // 导航项
-                    .child(self.render_nav_item(NavItem::Accounts, active_panel, cx))
-                    .child(self.render_nav_item(NavItem::Logs, active_panel, cx))
-                    .child(self.render_nav_item(NavItem::Dashboard, active_panel, cx))
-                    // 弹性空白
-                    .child(div().flex_grow())
-                    // 底部状态
+                    // 内容区域
                     .child(
                         div()
-                            .px_3()
-                            .pt_3()
-                            .border_t_1()
-                            .border_color(Glass::border())
-                            .child(
-                                div().text_xs()
-                                    .text_color(Glass::text_muted())
-                                    .child(format!("v0.1.0 | {} accounts", total))
-                            )
-                    )
-            )
-            // 内容区域
-            .child(
-                div()
-                    .flex_1()
-                    .flex()
-                    .flex_col()
-                    .overflow_hidden()
-                    // 顶部状态栏
-                    .child(
-                        div()
+                            .flex_1()
                             .flex()
-                            .items_center()
-                            .justify_between()
-                            .px_6()
-                            .py_3()
-                            .bg(Glass::panel_gradient())
-                            .border_b_1()
-                            .border_color(Glass::border())
-                            // 左侧: 状态信息
-                            .child(
-                                div().flex().items_center().gap_3()
-                                    .child(Self::render_status_dot(is_running))
-                                    .child(
-                                        div().text_sm().text_color(Glass::text_secondary())
-                                            .child(if is_running { "Running..." } else { "Ready" })
-                                    )
-                                    .child(
-                                        div().text_xs().text_color(Glass::text_muted())
-                                            .child(format!("Success: {} | Failed: {}", success_count, fail_count))
-                                    )
-                            )
-                            // 右侧: 签到按钮（非运行态加主色辉光）
+                            .flex_col()
+                            .overflow_hidden()
+                            // 顶部状态栏
                             .child(
                                 div()
-                                    .rounded(px(8.0))
-                                    .shadow(if is_running { Vec::new() } else { Glass::glow(Glass::primary()) })
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .px_6()
+                                    .py_3()
+                                    .bg(Glass::panel_gradient())
+                                    .border_b_1()
+                                    .border_color(Glass::border())
+                                    // 左侧: 状态信息
                                     .child(
-                                        Button::new("checkin-all")
-                                            .primary()
-                                            .label(if is_running { "Running..." } else { "Check-in All" })
-                                            .disabled(is_running)
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.trigger_checkin(cx);
-                                            }))
+                                        div().flex().items_center().gap_3()
+                                            .child(Self::render_status_dot(is_running))
+                                            .child(
+                                                div().text_sm().text_color(Glass::text_secondary())
+                                                    .child(if is_running { "Running..." } else { "Ready" })
+                                            )
+                                            .child(
+                                                div().text_xs().text_color(Glass::text_muted())
+                                                    .child(format!("Success: {} | Failed: {}", success_count, fail_count))
+                                            )
+                                    )
+                                    // 右侧: 签到按钮（非运行态加主色辉光）
+                                    .child(
+                                        div()
+                                            .rounded(px(8.0))
+                                            .shadow(if is_running { Vec::new() } else { Glass::glow(Glass::primary()) })
+                                            .child(
+                                                Button::new("checkin-all")
+                                                    .primary()
+                                                    .label(if is_running { "Running..." } else { "Check-in All" })
+                                                    .disabled(is_running)
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.trigger_checkin(cx);
+                                                    }))
+                                            )
                                     )
                             )
-                    )
-                    // 面板内容
-                    .child(
-                        div().id("content-scroll").flex_1().overflow_y_scroll().p_6()
-                            .child(content)
+                            // 面板内容
+                            .child(
+                                div().id("content-scroll").flex_1().overflow_y_scroll().p_6()
+                                    .child(content)
+                            )
                     )
             )
     }
