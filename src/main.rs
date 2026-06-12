@@ -12,6 +12,7 @@ mod notify;
 mod playwright;
 mod root_view;
 mod service;
+mod storage;
 mod theme;
 
 use gpui::*;
