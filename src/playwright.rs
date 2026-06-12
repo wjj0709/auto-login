@@ -36,10 +36,12 @@ pub struct PlaywrightResult {
     #[serde(default)]
     pub after: Option<QuotaInfo>,
     #[serde(default)]
+    #[allow(dead_code)]
     pub user_info: Option<serde_json::Value>,
     #[serde(default)]
     pub error: Option<String>,
     #[serde(default)]
+    #[allow(dead_code)]
     pub used_login: bool,
 }
 

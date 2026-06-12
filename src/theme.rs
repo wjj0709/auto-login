@@ -130,8 +130,10 @@ impl Glass {
     /// 面板背景 rgba(15, 15, 25, 0.75)
     pub fn panel() -> Hsla { rgba(15, 15, 25, 0.75) }
     /// 卡片背景 rgba(25, 25, 40, 0.6)
+    #[allow(dead_code)]
     pub fn card() -> Hsla { rgba(25, 25, 40, 0.6) }
     /// 卡片悬停 rgba(35, 35, 55, 0.7)
+    #[allow(dead_code)]
     pub fn card_hover() -> Hsla { rgba(35, 35, 55, 0.7) }
     /// 微光边框 rgba(100, 100, 140, 0.15)
     pub fn border() -> Hsla { rgba(100, 100, 140, 0.15) }

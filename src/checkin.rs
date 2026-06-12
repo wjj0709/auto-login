@@ -1,8 +1,11 @@
+//! 签到结果通知文本格式化（含用户信息脱敏展示）。
+//! 尚未接入 GPUI 流程，暂以 `#![allow(dead_code)]` 整体保留，待后续集成。
+#![allow(dead_code)]
+
 use serde_json::{Map, Value};
 
 /// 单账号签到详情，用于格式化通知消息
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct CheckInDetail {
     pub name: String,
     pub user_info: Option<String>,

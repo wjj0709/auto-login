@@ -52,6 +52,7 @@ pub struct BalanceInfo {
     pub quota: f64,
     pub used_quota: f64,
     pub reward: f64,
+    #[allow(dead_code)]
     pub usage_increase: f64,
 }
 

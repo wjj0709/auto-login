@@ -1,3 +1,7 @@
+//! 邮件 / 推送通知子系统（EmailNotifier、NotificationKit）。
+//! 尚未接入 GPUI 流程，暂以 `#![allow(dead_code)]` 整体保留，待后续集成。
+#![allow(dead_code)]
+
 use std::time::Instant;
 use lettre::{
     message::header::ContentType,

@@ -1,3 +1,7 @@
+//! 余额哈希检测：记录上次余额快照以判断是否变化（用于决定是否推送通知）。
+//! 该子系统尚未接入 GPUI 流程，暂以 `#![allow(dead_code)]` 整体保留，待后续集成。
+#![allow(dead_code)]
+
 use sha2::{Sha256, Digest};
 use std::collections::HashMap;
 use std::fs;
