@@ -17,3 +17,11 @@ anyhow = "1.0"
 # GPUI 框架
 gpui = "0.2.2"
 gpui-component = "0.5.1"
+
+# SQLite 数据层
+rusqlite = { version = "0.32", features = ["bundled"] }
+keyring = { version = "3", features = ["windows-native"] }
+aes-gcm = "0.10"
+rand = "0.8"
+base64 = "0.22"
+dirs = "5"
