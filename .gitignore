@@ -12,5 +12,8 @@ target
 # 运行时产物
 balance_hash.txt
 
+# 头脑风暴可视化会话
+.superpowers/
+
 # 参考数据
 docs/reference
