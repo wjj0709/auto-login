@@ -446,9 +446,10 @@ impl Storage {
                     fetched_at  TEXT NOT NULL,
                     PRIMARY KEY (account_id, kind)
                 );
+                INSERT INTO meta(key, value) VALUES('schema_version', '1')
+                    ON CONFLICT(key) DO UPDATE SET value = excluded.value;
                 COMMIT;",
             )?;
-            self.set_meta("schema_version", "1")?;
         }
         Ok(())
     }
