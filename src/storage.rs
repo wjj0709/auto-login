@@ -233,6 +233,103 @@ impl Storage {
             .context("写入元信息失败")?;
         Ok(())
     }
+
+    #[allow(dead_code)] // Task 8 应用接线接入后使用
+    pub fn insert_site(&self, input: &SiteInput) -> Result<i64> {
+        let now = now_iso();
+        self.conn.execute(
+            "INSERT INTO sites(name, domain, login_path, sign_in_path, user_info_path,
+                               tokens_path, logs_path, chart_path, api_user_key,
+                               created_at, updated_at)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?10)",
+            rusqlite::params![
+                input.name, input.domain, input.login_path, input.sign_in_path,
+                input.user_info_path, input.tokens_path, input.logs_path,
+                input.chart_path, input.api_user_key, now,
+            ],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    #[allow(dead_code)] // Task 8 应用接线接入后使用
+    pub fn update_site(&self, id: i64, input: &SiteInput) -> Result<()> {
+        self.conn.execute(
+            "UPDATE sites SET name=?1, domain=?2, login_path=?3, sign_in_path=?4,
+                              user_info_path=?5, tokens_path=?6, logs_path=?7,
+                              chart_path=?8, api_user_key=?9, updated_at=?10
+             WHERE id=?11",
+            rusqlite::params![
+                input.name, input.domain, input.login_path, input.sign_in_path,
+                input.user_info_path, input.tokens_path, input.logs_path,
+                input.chart_path, input.api_user_key, now_iso(), id,
+            ],
+        )?;
+        Ok(())
+    }
+
+    #[allow(dead_code)] // Task 8 应用接线接入后使用
+    pub fn delete_site(&self, id: i64) -> Result<()> {
+        self.conn.execute("DELETE FROM sites WHERE id=?1", [id])?;
+        Ok(())
+    }
+
+    #[allow(dead_code)] // Task 8 应用接线接入后使用
+    pub fn get_site(&self, id: i64) -> Result<Option<Site>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, domain, login_path, sign_in_path, user_info_path,
+                    tokens_path, logs_path, chart_path, api_user_key, created_at, updated_at
+             FROM sites WHERE id=?1",
+        )?;
+        let mut rows = stmt.query([id])?;
+        Ok(match rows.next()? {
+            Some(row) => Some(Self::row_to_site(row)?),
+            None => None,
+        })
+    }
+
+    #[allow(dead_code)] // Task 7 .env 导入接入后使用
+    pub fn find_site_by_name(&self, name: &str) -> Result<Option<Site>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, domain, login_path, sign_in_path, user_info_path,
+                    tokens_path, logs_path, chart_path, api_user_key, created_at, updated_at
+             FROM sites WHERE name=?1",
+        )?;
+        let mut rows = stmt.query([name])?;
+        Ok(match rows.next()? {
+            Some(row) => Some(Self::row_to_site(row)?),
+            None => None,
+        })
+    }
+
+    #[allow(dead_code)] // Task 8 应用接线接入后使用
+    pub fn list_sites(&self) -> Result<Vec<Site>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, domain, login_path, sign_in_path, user_info_path,
+                    tokens_path, logs_path, chart_path, api_user_key, created_at, updated_at
+             FROM sites ORDER BY id",
+        )?;
+        let rows = stmt.query_map([], Self::row_to_site)?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    /// 行 → Site 的唯一映射来源(三个查询共用,列顺序以 SELECT 为准)。
+    #[allow(dead_code)] // Task 8 应用接线接入后使用
+    fn row_to_site(row: &rusqlite::Row<'_>) -> rusqlite::Result<Site> {
+        Ok(Site {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            domain: row.get(2)?,
+            login_path: row.get(3)?,
+            sign_in_path: row.get(4)?,
+            user_info_path: row.get(5)?,
+            tokens_path: row.get(6)?,
+            logs_path: row.get(7)?,
+            chart_path: row.get(8)?,
+            api_user_key: row.get(9)?,
+            created_at: row.get(10)?,
+            updated_at: row.get(11)?,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -332,5 +429,38 @@ mod tests {
                 .unwrap();
             assert_eq!(n, 0, "{} 级联删除后应为空", table);
         }
+    }
+
+    #[test]
+    fn site_crud_roundtrip() {
+        let s = test_storage();
+        let id = s
+            .insert_site(&SiteInput::with_defaults("AnyRouter", "https://anyrouter.top"))
+            .unwrap();
+        let site = s.get_site(id).unwrap().expect("应能查到");
+        assert_eq!(site.name, "AnyRouter");
+        assert_eq!(site.login_path, "/login");
+        assert_eq!(site.sign_in_path.as_deref(), Some("/api/user/sign_in"));
+        assert_eq!(site.tokens_path, "/api/token/");
+        assert!(!site.created_at.is_empty());
+
+        let mut input = SiteInput::with_defaults("AnyRouter2", "https://x.example.com");
+        input.sign_in_path = None; // 改为自动签到型
+        s.update_site(id, &input).unwrap();
+        let site = s.get_site(id).unwrap().unwrap();
+        assert_eq!(site.name, "AnyRouter2");
+        assert_eq!(site.sign_in_path, None);
+
+        assert_eq!(s.list_sites().unwrap().len(), 1);
+        s.delete_site(id).unwrap();
+        assert!(s.get_site(id).unwrap().is_none());
+        assert!(s.list_sites().unwrap().is_empty());
+    }
+
+    #[test]
+    fn site_name_must_be_unique() {
+        let s = test_storage();
+        s.insert_site(&SiteInput::with_defaults("A", "https://a.com")).unwrap();
+        assert!(s.insert_site(&SiteInput::with_defaults("A", "https://b.com")).is_err());
     }
 }
