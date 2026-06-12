@@ -44,6 +44,9 @@ pub struct SiteInput {
 
 impl SiteInput {
     /// new-api 系站点的默认路径约定。
+    ///
+    /// Rust 侧 `with_defaults` 是权威默认值来源;建表 DDL 中的 DEFAULT 仅作裸 SQL 写入时的兜底,
+    /// 两处需保持一致。
     #[allow(dead_code)] // Task 4/7 接入后使用
     pub fn with_defaults(name: &str, domain: &str) -> Self {
         Self {
@@ -99,6 +102,9 @@ pub struct Storage {
 }
 
 /// ISO8601 本地时间(含时区偏移),全库统一的时间格式。
+///
+/// 比较约束:时间比较必须先 parse 成 `DateTime` 再比较,不得对字符串做裸比较
+/// (混合时区偏移时字典序不可靠);SQL 端比较需用 `datetime(col)` 归一化。
 #[allow(dead_code)] // Task 4 起写库时间戳使用
 pub fn now_iso() -> String {
     Local::now().to_rfc3339_opts(SecondsFormat::Secs, false)
@@ -140,19 +146,24 @@ impl Storage {
 
     /// 建表迁移;按 schema_version 递增,可重复执行。
     pub fn migrate(&mut self) -> Result<()> {
-        self.conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS meta (
+        self.conn
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS meta (
                 key   TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             );",
-        )?;
+            )
+            .context("初始化 meta 表失败")?;
         let version: i64 = self
             .get_meta("schema_version")?
             .and_then(|v| v.parse().ok())
             .unwrap_or(0);
         if version < 1 {
-            self.conn.execute_batch(
-                "BEGIN;
+            // 注意:版本号必须与建表 DDL 同事务写入,避免「表已建但版本号未落盘」的不可自愈状态;
+            // 业务表刻意不用 IF NOT EXISTS,严格模式下能及时暴露状态机错误。
+            self.conn
+                .execute_batch(
+                    "BEGIN;
                 CREATE TABLE sites (
                     id             INTEGER PRIMARY KEY AUTOINCREMENT,
                     name           TEXT NOT NULL UNIQUE,
@@ -185,32 +196,41 @@ impl Storage {
                     account_id  INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
                     kind        TEXT NOT NULL,
                     payload     TEXT NOT NULL,
+                    -- encrypted=1 时 payload 为 base64(nonce‖ciphertext)
                     encrypted   INTEGER NOT NULL DEFAULT 0,
                     fetched_at  TEXT NOT NULL,
                     PRIMARY KEY (account_id, kind)
                 );
+                INSERT INTO meta(key, value) VALUES('schema_version', '1')
+                    ON CONFLICT(key) DO UPDATE SET value = excluded.value;
                 COMMIT;",
-            )?;
-            self.set_meta("schema_version", "1")?;
+                )
+                .context("建表迁移(v1)失败")?;
         }
         Ok(())
     }
 
     pub fn get_meta(&self, key: &str) -> Result<Option<String>> {
-        let mut stmt = self.conn.prepare("SELECT value FROM meta WHERE key = ?1")?;
-        let mut rows = stmt.query([key])?;
-        Ok(match rows.next()? {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT value FROM meta WHERE key = ?1")
+            .context("读取元信息失败:预编译查询")?;
+        let mut rows = stmt.query([key]).context("读取元信息失败:执行查询")?;
+        Ok(match rows.next().context("读取元信息失败:遍历结果")? {
             Some(row) => Some(row.get(0)?),
             None => None,
         })
     }
 
+    #[allow(dead_code)] // Task 7 写入 env_imported 等标记使用;迁移版本号已改为同事务 SQL 写入
     pub fn set_meta(&self, key: &str, value: &str) -> Result<()> {
-        self.conn.execute(
-            "INSERT INTO meta(key, value) VALUES(?1, ?2)
+        self.conn
+            .execute(
+                "INSERT INTO meta(key, value) VALUES(?1, ?2)
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            [key, value],
-        )?;
+                [key, value],
+            )
+            .context("写入元信息失败")?;
         Ok(())
     }
 }
@@ -254,5 +274,63 @@ mod tests {
         assert_eq!(s.get_meta("env_imported").unwrap().as_deref(), Some("1"));
         s.set_meta("env_imported", "2").unwrap(); // 覆盖写
         assert_eq!(s.get_meta("env_imported").unwrap().as_deref(), Some("2"));
+    }
+
+    #[test]
+    fn fk_enforced_and_cascade_works() {
+        let s = test_storage();
+        let now = now_iso();
+        // 省略全部路径列,验证 DDL DEFAULT 兜底生效
+        s.conn
+            .execute(
+                "INSERT INTO sites(name, domain, created_at, updated_at) VALUES('s1', 'https://a.com', ?1, ?1)",
+                [&now],
+            )
+            .unwrap();
+        let login_path: String = s
+            .conn
+            .query_row("SELECT login_path FROM sites WHERE name = 's1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(login_path, "/login");
+
+        let site_id: i64 = s
+            .conn
+            .query_row("SELECT id FROM sites WHERE name = 's1'", [], |r| r.get(0))
+            .unwrap();
+        s.conn
+            .execute(
+                "INSERT INTO accounts(site_id, name, api_user, created_at, updated_at) VALUES(?1, 'a1', 'u1', ?2, ?2)",
+                rusqlite::params![site_id, now],
+            )
+            .unwrap();
+        let account_id: i64 = s
+            .conn
+            .query_row("SELECT id FROM accounts WHERE name = 'a1'", [], |r| r.get(0))
+            .unwrap();
+        s.conn
+            .execute(
+                "INSERT INTO account_cache(account_id, kind, payload, fetched_at) VALUES(?1, 'overview', '{}', ?2)",
+                rusqlite::params![account_id, now],
+            )
+            .unwrap();
+
+        // 悬空外键应被拒绝
+        assert!(s
+            .conn
+            .execute(
+                "INSERT INTO accounts(site_id, name, api_user, created_at, updated_at) VALUES(9999, 'bad', 'u', ?1, ?1)",
+                [&now],
+            )
+            .is_err());
+
+        // 删除站点应级联清空两张子表
+        s.conn.execute("DELETE FROM sites", []).unwrap();
+        for table in ["accounts", "account_cache"] {
+            let n: i64 = s
+                .conn
+                .query_row(&format!("SELECT COUNT(*) FROM {}", table), [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(n, 0, "{} 级联删除后应为空", table);
+        }
     }
 }
