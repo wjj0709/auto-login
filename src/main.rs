@@ -1,5 +1,6 @@
 mod account_panel;
 mod app_state;
+mod assets;
 mod balance;
 mod checkin;
 mod config;
@@ -15,6 +16,7 @@ mod theme;
 use gpui::*;
 
 use app_state::AppState;
+use assets::Assets;
 use config::load_accounts_config;
 use root_view::RootView;
 
@@ -25,8 +27,8 @@ fn main() {
     // 预加载账号配置
     let accounts = load_accounts_config().unwrap_or_default();
 
-    // 启动 GPUI 应用
-    let app = Application::new();
+    // 启动 GPUI 应用（注册图标资源加载器，供标题栏与侧边栏图标使用）
+    let app = Application::new().with_assets(Assets);
 
     app.run(move |cx| {
         // 初始化 gpui-component
