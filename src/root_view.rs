@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::Disableable;
@@ -79,6 +81,22 @@ impl RootView {
         service::run_checkin_all(weak, cx);
     }
 
+    /// 顶部状态指示点：运行中为脉冲呼吸的橙色点，空闲为静态绿色点
+    fn render_status_dot(is_running: bool) -> AnyElement {
+        let color = if is_running { Glass::warning() } else { Glass::success() };
+        let dot = div().w(px(8.0)).h(px(8.0)).rounded(px(4.0)).bg(color);
+        if is_running {
+            dot.with_animation(
+                "status-pulse",
+                Animation::new(Duration::from_secs_f64(1.2)).repeat(),
+                move |el, delta| el.opacity(0.35 + 0.65 * (delta * std::f32::consts::PI).sin()),
+            )
+            .into_any_element()
+        } else {
+            dot.into_any_element()
+        }
+    }
+
     fn render_nav_item(
         &self,
         item: NavItem,
@@ -97,14 +115,19 @@ impl RootView {
             .py_2()
             .rounded(px(8.0))
             .cursor_pointer()
-            .bg(if is_active { Glass::card() } else { Glass::transparent() })
+            .bg(if is_active { Glass::primary().opacity(0.18) } else { Glass::transparent() })
             .border_1()
-            .border_color(if is_active { Glass::border_bright() } else { Glass::transparent() })
+            .border_color(if is_active { Glass::primary().opacity(0.45) } else { Glass::transparent() })
+            .shadow(if is_active { Glass::glow(Glass::primary()) } else { Vec::new() })
             .text_color(if is_active { Glass::primary() } else { Glass::text_secondary() })
-            .hover(|s| s.bg(Glass::card_hover()))
+            .hover(|s| s.bg(Glass::primary().opacity(0.1)).text_color(Glass::text()))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.switch_panel(panel, cx);
             }))
+            .child(
+                div().w(px(3.0)).h(px(14.0)).rounded(px(2.0))
+                    .bg(if is_active { Glass::primary() } else { Glass::transparent() })
+            )
             .child(
                 div().text_sm().font_weight(FontWeight::MEDIUM)
                     .child(item.label())
@@ -146,20 +169,35 @@ impl Render for RootView {
                     // 应用标题
                     .child(
                         div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
                             .px_3()
                             .pb_4()
                             .mb_2()
                             .border_b_1()
                             .border_color(Glass::border())
                             .child(
-                                div().text_base().font_weight(FontWeight::BOLD)
-                                    .text_color(Glass::primary())
-                                    .child("AnyRouter")
+                                div().w(px(30.0)).h(px(30.0)).rounded(px(8.0))
+                                    .bg(Glass::primary())
+                                    .shadow(Glass::glow(Glass::primary()))
+                                    .flex().items_center().justify_center()
+                                    .text_color(hsla(0.0, 0.0, 1.0, 1.0))
+                                    .text_sm().font_weight(FontWeight::BOLD)
+                                    .child("A")
                             )
                             .child(
-                                div().text_xs().mt_1()
-                                    .text_color(Glass::text_muted())
-                                    .child("Auto Check-in")
+                                div().flex().flex_col()
+                                    .child(
+                                        div().text_base().font_weight(FontWeight::BOLD)
+                                            .text_color(Glass::primary())
+                                            .child("AnyRouter")
+                                    )
+                                    .child(
+                                        div().text_xs()
+                                            .text_color(Glass::text_muted())
+                                            .child("Auto Check-in")
+                                    )
                             )
                     )
                     // 导航项
@@ -197,12 +235,13 @@ impl Render for RootView {
                             .justify_between()
                             .px_6()
                             .py_3()
-                            .bg(Glass::panel())
+                            .bg(Glass::panel_gradient())
                             .border_b_1()
                             .border_color(Glass::border())
                             // 左侧: 状态信息
                             .child(
                                 div().flex().items_center().gap_3()
+                                    .child(Self::render_status_dot(is_running))
                                     .child(
                                         div().text_sm().text_color(Glass::text_secondary())
                                             .child(if is_running { "Running..." } else { "Ready" })
@@ -212,15 +251,20 @@ impl Render for RootView {
                                             .child(format!("Success: {} | Failed: {}", success_count, fail_count))
                                     )
                             )
-                            // 右侧: 签到按钮
+                            // 右侧: 签到按钮（非运行态加主色辉光）
                             .child(
-                                Button::new("checkin-all")
-                                    .primary()
-                                    .label(if is_running { "Running..." } else { "Check-in All" })
-                                    .disabled(is_running)
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.trigger_checkin(cx);
-                                    }))
+                                div()
+                                    .rounded(px(8.0))
+                                    .shadow(if is_running { Vec::new() } else { Glass::glow(Glass::primary()) })
+                                    .child(
+                                        Button::new("checkin-all")
+                                            .primary()
+                                            .label(if is_running { "Running..." } else { "Check-in All" })
+                                            .disabled(is_running)
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.trigger_checkin(cx);
+                                            }))
+                                    )
                             )
                     )
                     // 面板内容
