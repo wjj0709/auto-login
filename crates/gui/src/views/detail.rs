@@ -90,11 +90,11 @@ pub fn render(
         .child(render_tabs(active_tab, state_for_tabs))
         // Tab 内容
         .child(match active_tab {
-            0 => render_overview_tab(account_for_tab, overview_cache),
+            0 => render_overview_tab(state.clone(), account_id, account_for_tab, overview_cache),
             1 => render_tokens_tab(tokens_cache),
             2 => render_logs_tab(logs_cache),
             3 => render_chart_tab(chart_cache),
-            _ => render_overview_tab(account_for_tab, overview_cache),
+            _ => render_overview_tab(state.clone(), account_id, account_for_tab, overview_cache),
         })
         .into_any_element()
 }
@@ -245,6 +245,8 @@ fn info_card(content: AnyElement) -> AnyElement {
 }
 
 fn render_overview_tab(
+    state: Entity<AppState>,
+    account_id: i64,
     account: Option<Account>,
     cache: Option<anyrouter_core::models::AccountCache>,
 ) -> AnyElement {
@@ -290,6 +292,11 @@ fn render_overview_tab(
         None => "🍪 未加载账户".to_string(),
     };
 
+    let has_credentials = account
+        .as_ref()
+        .map(|a| a.username.is_some() && a.password.is_some())
+        .unwrap_or(false);
+
     let api_user = account
         .as_ref()
         .map(|a| a.api_user.clone())
@@ -314,14 +321,50 @@ fn render_overview_tab(
             div()
                 .flex()
                 .flex_col()
-                .gap(px(4.0))
+                .gap(px(6.0))
                 .text_size(px(11.0))
                 .text_color(theme::text_secondary())
                 .child(div().child(cookie_status))
                 .child(
                     div()
-                        .text_color(theme::text_weakest())
-                        .child("如需手动续期 Cookie，请在弹窗中执行账密登录"),
+                        .flex()
+                        .items_center()
+                        .gap(px(8.0))
+                        .child(if has_credentials {
+                            div()
+                                .id("login-refresh")
+                                .px(px(10.0))
+                                .py(px(3.0))
+                                .bg(theme::btn_primary_bg())
+                                .border_1()
+                                .border_color(theme::btn_primary_border())
+                                .rounded(px(5.0))
+                                .text_color(theme::accent_blue())
+                                .text_size(px(10.0))
+                                .cursor_pointer()
+                                .hover(|this| this.opacity(0.85))
+                                .child("账密登录刷新")
+                                .on_click(move |_, _w, cx| {
+                                    crate::views::root::trigger_login_account(
+                                        state.clone(),
+                                        account_id,
+                                        cx,
+                                    );
+                                })
+                                .into_any_element()
+                        } else {
+                            div()
+                                .px(px(10.0))
+                                .py(px(3.0))
+                                .bg(theme::bg_card())
+                                .border_1()
+                                .border_color(theme::border_normal())
+                                .rounded(px(5.0))
+                                .text_color(theme::text_weakest())
+                                .text_size(px(10.0))
+                                .child("账密登录刷新（未配置用户名密码）")
+                                .into_any_element()
+                        }),
                 )
                 .into_any_element(),
         ))
