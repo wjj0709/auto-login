@@ -71,8 +71,14 @@ impl Render for RootView {
 }
 
 impl RootView {
-    fn render_titlebar(&self, _cx: &mut Context<Self>) -> AnyElement {
+    fn render_titlebar(&self, cx: &mut Context<Self>) -> AnyElement {
         let state = self.state.clone();
+        let running = self.state.read(cx).running;
+        let label = if running {
+            "⏳ 签到运行中…"
+        } else {
+            "⚡ 一键签到全部"
+        };
         div()
             .w_full()
             .h(px(40.0))
@@ -94,15 +100,28 @@ impl RootView {
                     .id("checkin-all-btn")
                     .px(px(12.0))
                     .py(px(4.0))
-                    .bg(theme::btn_primary_bg())
+                    .bg(if running {
+                        theme::bg_card()
+                    } else {
+                        theme::btn_primary_bg()
+                    })
                     .border_1()
-                    .border_color(theme::btn_primary_border())
+                    .border_color(if running {
+                        theme::border_normal()
+                    } else {
+                        theme::btn_primary_border()
+                    })
                     .rounded(px(5.0))
-                    .text_color(theme::accent_blue())
+                    .text_color(if running {
+                        theme::text_weakest()
+                    } else {
+                        theme::accent_blue()
+                    })
                     .text_size(px(11.0))
-                    .cursor_pointer()
-                    .hover(|this| this.opacity(0.85))
-                    .child("⚡ 一键签到全部")
+                    .when(!running, |this| {
+                        this.cursor_pointer().hover(|this| this.opacity(0.85))
+                    })
+                    .child(label)
                     .on_click(move |_, _window, cx| {
                         trigger_checkin_all(state.clone(), cx);
                     }),
