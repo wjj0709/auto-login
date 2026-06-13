@@ -13,3 +13,4 @@ chrono = { workspace = true }
 anyhow = { workspace = true }
 eframe = { version = "0.31", features = ["default"] }
 egui = "0.31"
+dotenvy = "0.15"

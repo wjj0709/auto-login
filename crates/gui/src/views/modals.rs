@@ -1,5 +1,6 @@
 use egui::{self, Align2, Color32, RichText, Stroke, Vec2};
 
+use anyrouter_core::models::{AccountInput, SiteInput};
 use crate::app_state::{AppState, DeleteTarget, LogEntry, LogLevel, ModalKind, ViewKind};
 use crate::theme;
 
@@ -45,12 +46,12 @@ fn render_account_list_modal(ctx: &egui::Context, state: &mut AppState, site_id:
         .map(|s| s.site.name.clone())
         .unwrap_or_else(|| "未知站点".into());
 
-    // 模拟账户数据
-    let mock_accounts = vec![
-        (1i64, "alice@example.com", true),
-        (2i64, "bob@example.com", true),
-        (3i64, "charlie@example.com", false),
-    ];
+    // 从数据库加载账户
+    let accounts = state
+        .storage
+        .as_ref()
+        .and_then(|s| s.list_accounts_by_site(site_id).ok())
+        .unwrap_or_default();
 
     egui::Window::new(format!("{} \u{00b7} 账户管理", site_name))
         .id(egui::Id::new("modal_account_list"))
@@ -68,11 +69,20 @@ fn render_account_list_modal(ctx: &egui::Context, state: &mut AppState, site_id:
         .show(ctx, |ui| {
             ui.set_min_width(460.0);
 
-            for (acc_id, acc_name, cookie_valid) in &mock_accounts {
+            if accounts.is_empty() {
+                ui.label(
+                    RichText::new("暂无账户，点击下方按钮新增")
+                        .size(14.0)
+                        .color(theme::TEXT_MUTED),
+                );
+                ui.add_space(8.0);
+            }
+
+            for acc in &accounts {
                 ui.horizontal(|ui| {
                     // 账户名
                     ui.label(
-                        RichText::new(*acc_name)
+                        RichText::new(&acc.name)
                             .size(14.0)
                             .color(theme::TEXT_PRIMARY),
                     );
@@ -80,10 +90,11 @@ fn render_account_list_modal(ctx: &egui::Context, state: &mut AppState, site_id:
                     ui.add_space(8.0);
 
                     // Cookie 状态
-                    let (status_text, status_color) = if *cookie_valid {
+                    let cookie_valid = acc.cookies.is_some();
+                    let (status_text, status_color) = if cookie_valid {
                         ("有效", theme::SUCCESS_GREEN)
                     } else {
-                        ("已过期", theme::ERROR_RED)
+                        ("无Cookie", theme::ERROR_RED)
                     };
                     ui.label(RichText::new(status_text).size(12.0).color(status_color));
 
@@ -97,8 +108,8 @@ fn render_account_list_modal(ctx: &egui::Context, state: &mut AppState, site_id:
                         if ui.add(del_btn).clicked() {
                             state.active_modal =
                                 Some(ModalKind::ConfirmDelete(DeleteTarget::Account {
-                                    id: *acc_id,
-                                    name: acc_name.to_string(),
+                                    id: acc.id,
+                                    name: acc.name.clone(),
                                 }));
                         }
 
@@ -109,9 +120,15 @@ fn render_account_list_modal(ctx: &egui::Context, state: &mut AppState, site_id:
                         .fill(Color32::TRANSPARENT)
                         .stroke(Stroke::NONE);
                         if ui.add(edit_btn).clicked() {
+                            // 预填表单
+                            state.form_account_name = acc.name.clone();
+                            state.form_account_api_user = acc.api_user.clone();
+                            state.form_account_cookie = acc.cookies.clone().unwrap_or_default();
+                            state.form_account_username = acc.username.clone().unwrap_or_default();
+                            state.form_account_password = acc.password.clone().unwrap_or_default();
                             state.active_modal = Some(ModalKind::AccountForm {
                                 site_id,
-                                account_id: Some(*acc_id),
+                                account_id: Some(acc.id),
                             });
                         }
 
@@ -124,7 +141,7 @@ fn render_account_list_modal(ctx: &egui::Context, state: &mut AppState, site_id:
                         .fill(Color32::TRANSPARENT)
                         .stroke(Stroke::NONE);
                         if ui.add(detail_btn).clicked() {
-                            state.current_view = ViewKind::AccountDetail(*acc_id);
+                            state.current_view = ViewKind::AccountDetail(acc.id);
                             state.active_modal = None;
                         }
                     });
@@ -146,6 +163,12 @@ fn render_account_list_modal(ctx: &egui::Context, state: &mut AppState, site_id:
                 .fill(theme::BTN_PRIMARY_BG)
                 .stroke(Stroke::new(1.0, theme::BTN_PRIMARY_BORDER));
                 if ui.add(add_btn).clicked() {
+                    // 清空表单
+                    state.form_account_name.clear();
+                    state.form_account_api_user.clear();
+                    state.form_account_cookie.clear();
+                    state.form_account_username.clear();
+                    state.form_account_password.clear();
                     state.active_modal = Some(ModalKind::AccountForm {
                         site_id,
                         account_id: None,
@@ -163,7 +186,7 @@ fn render_account_list_modal(ctx: &egui::Context, state: &mut AppState, site_id:
                 .stroke(Stroke::new(1.0, theme::BORDER_ACCENT));
                 if ui.add(checkin_btn).clicked() {
                     state.log_entries.push(LogEntry {
-                        timestamp: "刚刚".into(),
+                        timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
                         level: LogLevel::Info,
                         message: format!("触发站点 {} 签到...", site_name),
                     });
@@ -252,7 +275,46 @@ fn render_site_form_modal(ctx: &egui::Context, state: &mut AppState, site_id: Op
                 .fill(theme::BTN_PRIMARY_BG)
                 .stroke(Stroke::new(1.0, theme::BTN_PRIMARY_BORDER));
                 if ui.add(save_btn).clicked() {
-                    // TODO: persist
+                    // 执行保存操作
+                    let input = SiteInput {
+                        name: state.form_site_name.clone(),
+                        domain: state.form_site_domain.clone(),
+                        login_path: "/auth/login".to_string(),
+                        sign_in_path: None,
+                        user_info_path: "/api/user/getSubInfo".to_string(),
+                        tokens_path: "/api/user/getSubTokens".to_string(),
+                        logs_path: "/api/user/getSubLogs".to_string(),
+                        chart_path: "/api/user/getSubChart".to_string(),
+                        api_user_key: "user".to_string(),
+                    };
+
+                    if let Some(ref storage) = state.storage {
+                        let result = if let Some(id) = site_id {
+                            storage.update_site(id, &input).map(|_| ())
+                        } else {
+                            storage.insert_site(&input).map(|_| ())
+                        };
+
+                        match result {
+                            Ok(()) => {
+                                state.log_entries.push(LogEntry {
+                                    timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
+                                    level: LogLevel::Success,
+                                    message: format!("站点 \"{}\" 保存成功", input.name),
+                                });
+                            }
+                            Err(e) => {
+                                state.log_entries.push(LogEntry {
+                                    timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
+                                    level: LogLevel::Error,
+                                    message: format!("站点保存失败: {}", e),
+                                });
+                            }
+                        }
+                    }
+
+                    // 刷新站点列表
+                    state.reload_sites();
                     state.active_modal = None;
                 }
             });
@@ -263,7 +325,7 @@ fn render_site_form_modal(ctx: &egui::Context, state: &mut AppState, site_id: Op
 fn render_account_form_modal(
     ctx: &egui::Context,
     state: &mut AppState,
-    _site_id: i64,
+    site_id: i64,
     account_id: Option<i64>,
 ) {
     let title = if account_id.is_some() {
@@ -373,7 +435,54 @@ fn render_account_form_modal(
                 .fill(theme::BTN_PRIMARY_BG)
                 .stroke(Stroke::new(1.0, theme::BTN_PRIMARY_BORDER));
                 if ui.add(save_btn).clicked() {
-                    // TODO: persist
+                    let input = AccountInput {
+                        site_id,
+                        name: state.form_account_name.clone(),
+                        api_user: state.form_account_api_user.clone(),
+                        username: if state.form_account_username.is_empty() {
+                            None
+                        } else {
+                            Some(state.form_account_username.clone())
+                        },
+                        password: if state.form_account_password.is_empty() {
+                            None
+                        } else {
+                            Some(state.form_account_password.clone())
+                        },
+                        cookies: if state.form_account_cookie.is_empty() {
+                            None
+                        } else {
+                            Some(state.form_account_cookie.clone())
+                        },
+                    };
+
+                    if let Some(ref storage) = state.storage {
+                        let result = if let Some(id) = account_id {
+                            storage.update_account(id, &input).map(|_| ())
+                        } else {
+                            storage.insert_account(&input).map(|_| ())
+                        };
+
+                        match result {
+                            Ok(()) => {
+                                state.log_entries.push(LogEntry {
+                                    timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
+                                    level: LogLevel::Success,
+                                    message: format!("账户 \"{}\" 保存成功", input.name),
+                                });
+                            }
+                            Err(e) => {
+                                state.log_entries.push(LogEntry {
+                                    timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
+                                    level: LogLevel::Error,
+                                    message: format!("账户保存失败: {}", e),
+                                });
+                            }
+                        }
+                    }
+
+                    // 刷新站点列表
+                    state.reload_sites();
                     state.active_modal = None;
                 }
             });
@@ -442,7 +551,45 @@ fn render_confirm_delete_modal(
                 .fill(theme::BTN_DANGER_BG)
                 .stroke(Stroke::new(1.0, theme::BTN_DANGER_BORDER));
                 if ui.add(delete_btn).clicked() {
-                    // TODO: actually delete
+                    // 执行删除
+                    if let Some(ref storage) = state.storage {
+                        let result = match &target {
+                            DeleteTarget::Site { id, .. } => storage.delete_site(*id),
+                            DeleteTarget::Account { id, .. } => storage.delete_account(*id),
+                        };
+
+                        match result {
+                            Ok(()) => {
+                                let target_desc = match &target {
+                                    DeleteTarget::Site { name, .. } => {
+                                        format!("站点 \"{}\"", name)
+                                    }
+                                    DeleteTarget::Account { name, .. } => {
+                                        format!("账户 \"{}\"", name)
+                                    }
+                                };
+                                state.log_entries.push(LogEntry {
+                                    timestamp: chrono::Local::now()
+                                        .format("%H:%M:%S")
+                                        .to_string(),
+                                    level: LogLevel::Success,
+                                    message: format!("{} 删除成功", target_desc),
+                                });
+                            }
+                            Err(e) => {
+                                state.log_entries.push(LogEntry {
+                                    timestamp: chrono::Local::now()
+                                        .format("%H:%M:%S")
+                                        .to_string(),
+                                    level: LogLevel::Error,
+                                    message: format!("删除失败: {}", e),
+                                });
+                            }
+                        }
+                    }
+
+                    // 刷新站点列表
+                    state.reload_sites();
                     state.active_modal = None;
                 }
             });

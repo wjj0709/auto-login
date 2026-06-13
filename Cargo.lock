@@ -241,6 +241,7 @@ dependencies = [
  "anyhow",
  "anyrouter-core",
  "chrono",
+ "dotenvy",
  "eframe",
  "egui",
  "serde",

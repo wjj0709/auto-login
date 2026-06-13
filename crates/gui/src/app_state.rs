@@ -1,6 +1,10 @@
 #![allow(dead_code)]
 
-use anyrouter_core::models::{Site, SiteWithStats};
+use std::sync::mpsc;
+use std::sync::{Arc, atomic::AtomicBool};
+
+use anyrouter_core::models::SiteWithStats;
+use anyrouter_core::storage::Storage;
 
 /// 当前主视图
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,6 +69,64 @@ pub struct AppState {
     pub form_account_cookie: String,
     pub form_account_username: String,
     pub form_account_password: String,
+
+    // ─── Core 层集成 ──────────────────────────────────────────
+    /// 数据库 Storage（主线程使用）
+    pub storage: Option<Storage>,
+
+    /// 后台线程日志接收端
+    pub log_rx: Option<mpsc::Receiver<LogEntry>>,
+
+    /// 后台线程运行状态标志
+    pub bg_running: Arc<AtomicBool>,
+}
+
+impl AppState {
+    /// 从 Storage 加载站点列表（含统计信息）
+    pub fn reload_sites(&mut self) {
+        if let Some(ref storage) = self.storage {
+            match storage.list_sites() {
+                Ok(sites) => {
+                    self.sites = sites
+                        .into_iter()
+                        .map(|site| {
+                            let account_count = storage
+                                .list_accounts_by_site(site.id)
+                                .map(|a| a.len())
+                                .unwrap_or(0);
+                            SiteWithStats {
+                                site,
+                                account_count,
+                                total_balance: 0.0,
+                                expired_count: 0,
+                                checkin_today: 0,
+                            }
+                        })
+                        .collect();
+                }
+                Err(e) => {
+                    self.log_entries.push(LogEntry {
+                        timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
+                        level: LogLevel::Error,
+                        message: format!("加载站点失败: {}", e),
+                    });
+                }
+            }
+        }
+    }
+
+    /// 从 channel 中取出后台线程发送的日志
+    pub fn poll_bg_logs(&mut self) {
+        if let Some(ref rx) = self.log_rx {
+            while let Ok(entry) = rx.try_recv() {
+                self.log_entries.push(entry);
+            }
+        }
+        // 更新 running 标志
+        if !self.bg_running.load(std::sync::atomic::Ordering::Relaxed) && self.running {
+            self.running = false;
+        }
+    }
 }
 
 impl Default for AppState {
@@ -73,65 +135,8 @@ impl Default for AppState {
             current_view: ViewKind::Home,
             log_drawer_open: false,
             active_modal: None,
-            sites: vec![
-                SiteWithStats {
-                    site: Site {
-                        id: 1,
-                        name: "AnyRouter".into(),
-                        domain: "https://anyrouter.top".into(),
-                        login_path: "/login".into(),
-                        sign_in_path: Some("/sign-in".into()),
-                        user_info_path: "/api/user".into(),
-                        tokens_path: "/api/tokens".into(),
-                        logs_path: "/api/logs".into(),
-                        chart_path: "/api/chart".into(),
-                        api_user_key: "email".into(),
-                        created_at: "2025-01-01".into(),
-                        updated_at: "2025-01-01".into(),
-                    },
-                    account_count: 3,
-                    total_balance: 37.50,
-                    expired_count: 1,
-                    checkin_today: 2,
-                },
-                SiteWithStats {
-                    site: Site {
-                        id: 2,
-                        name: "AgentRouter".into(),
-                        domain: "https://agentrouter.org".into(),
-                        login_path: "/login".into(),
-                        sign_in_path: Some("/sign-in".into()),
-                        user_info_path: "/api/user".into(),
-                        tokens_path: "/api/tokens".into(),
-                        logs_path: "/api/logs".into(),
-                        chart_path: "/api/chart".into(),
-                        api_user_key: "email".into(),
-                        created_at: "2025-01-01".into(),
-                        updated_at: "2025-01-01".into(),
-                    },
-                    account_count: 2,
-                    total_balance: 19.30,
-                    expired_count: 0,
-                    checkin_today: 2,
-                },
-            ],
-            log_entries: vec![
-                LogEntry {
-                    timestamp: "10:00:01".into(),
-                    level: LogLevel::Info,
-                    message: "应用启动完成".into(),
-                },
-                LogEntry {
-                    timestamp: "10:00:02".into(),
-                    level: LogLevel::Success,
-                    message: "数据库连接成功".into(),
-                },
-                LogEntry {
-                    timestamp: "10:00:03".into(),
-                    level: LogLevel::Warning,
-                    message: "账户 charlie@example.com Cookie 即将过期".into(),
-                },
-            ],
+            sites: Vec::new(),
+            log_entries: vec![],
             running: false,
             run_progress: None,
             active_tab: 0,
@@ -142,6 +147,9 @@ impl Default for AppState {
             form_account_cookie: String::new(),
             form_account_username: String::new(),
             form_account_password: String::new(),
+            storage: None,
+            log_rx: None,
+            bg_running: Arc::new(AtomicBool::new(false)),
         }
     }
 }
