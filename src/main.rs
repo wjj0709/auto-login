@@ -1,11 +1,9 @@
-mod account_panel;
 mod app_state;
 mod assets;
 mod balance;
 mod checkin;
 mod config;
 mod crypto;
-mod dashboard;
 mod log;
 mod log_panel;
 mod notify;
@@ -43,18 +41,18 @@ fn main() {
     if let Err(e) = storage.import_env_if_needed() {
         eprintln!("[警告] 旧配置导入失败,以现有数据继续: {e:#}");
     }
-    // 解密失败(如主密钥已更换)必须显式失败,不得 unwrap_or_default 静默清空账户列表
-    let accounts = match storage.load_accounts_for_ui() {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("[启动失败] 读取账户数据失败(主密钥可能已更换): {e:#}");
-            std::process::exit(1);
-        }
-    };
-    let providers = match storage.load_providers_for_ui() {
+    let sites = match storage.list_sites() {
         Ok(v) => v,
         Err(e) => {
             eprintln!("[启动失败] 读取站点数据失败: {e:#}");
+            std::process::exit(1);
+        }
+    };
+    // 解密失败(如主密钥已更换)必须显式失败,不得 unwrap_or_default 静默清空账户列表
+    let accounts = match storage.list_all_accounts() {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("[启动失败] 读取账户数据失败(主密钥可能已更换): {e:#}");
             std::process::exit(1);
         }
     };
@@ -71,7 +69,7 @@ fn main() {
         theme::apply_abyss_theme(cx);
 
         // 创建全局应用状态
-        let app_state = cx.new(|_cx| AppState::new(accounts, providers, db));
+        let app_state = cx.new(|_cx| AppState::new(sites, accounts, db));
 
         // 打开主窗口
         let bounds = Bounds::centered(None, size(px(1100.0), px(700.0)), cx);

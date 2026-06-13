@@ -659,28 +659,20 @@ impl Storage {
     }
 
     /// 适配现有 UI/签到通路:站点 → ProviderConfig 映射(键为站点名)。
+    #[allow(dead_code)] // 旧适配入口;新通路直接用 site_to_provider_config
     pub fn load_providers_for_ui(
         &self,
     ) -> Result<std::collections::HashMap<String, ProviderConfig>> {
         let mut map = std::collections::HashMap::new();
         for site in self.list_sites()? {
-            map.insert(
-                site.name.clone(),
-                ProviderConfig {
-                    name: site.name,
-                    domain: site.domain,
-                    login_path: site.login_path,
-                    sign_in_path: site.sign_in_path,
-                    user_info_path: site.user_info_path,
-                    api_user_key: site.api_user_key,
-                },
-            );
+            map.insert(site.name.clone(), site_to_provider_config(&site));
         }
         Ok(map)
     }
 
     /// 适配现有 UI/签到通路:账户 → AccountConfig 列表。
     /// cookies 还原为 {k:v} 对象;账密以 _username/_password 注入(沿用旧偷渡约定)。
+    #[allow(dead_code)] // 旧适配入口;新通路按 account_id 走 account_to_legacy_config
     pub fn load_accounts_for_ui(&self) -> Result<Vec<AccountConfig>> {
         let sites: std::collections::HashMap<i64, String> = self
             .list_sites()?
@@ -689,24 +681,8 @@ impl Storage {
             .collect();
         let mut out = Vec::new();
         for acc in self.list_all_accounts()? {
-            let mut map = acc
-                .cookies_json
-                .as_deref()
-                .map(cookie_entries_to_map)
-                .unwrap_or_default();
-            if let Some(u) = &acc.username {
-                map.insert("_username".into(), serde_json::Value::String(u.clone()));
-            }
-            if let Some(p) = &acc.password {
-                map.insert("_password".into(), serde_json::Value::String(p.clone()));
-            }
             let Some(provider) = sites.get(&acc.site_id) else { continue };
-            out.push(AccountConfig {
-                cookies: serde_json::Value::Object(map),
-                api_user: acc.api_user,
-                provider: provider.clone(),
-                name: Some(acc.name),
-            });
+            out.push(account_to_legacy_config(&acc, provider));
         }
         Ok(out)
     }
@@ -807,6 +783,40 @@ pub fn cookie_entries_to_map(entries_json: &str) -> serde_json::Map<String, serd
         }
     }
     map
+}
+
+/// Site → 旧 ProviderConfig(签到/Playwright 通路与 UI 适配共用的唯一转换来源)。
+pub fn site_to_provider_config(site: &Site) -> ProviderConfig {
+    ProviderConfig {
+        name: site.name.clone(),
+        domain: site.domain.clone(),
+        login_path: site.login_path.clone(),
+        sign_in_path: site.sign_in_path.clone(),
+        user_info_path: site.user_info_path.clone(),
+        api_user_key: site.api_user_key.clone(),
+    }
+}
+
+/// Account → 旧 AccountConfig:cookies 还原为 {k:v} 对象,账密以 _username/_password 注入。
+/// `provider_name` 为账户所属站点名(写入 AccountConfig.provider)。
+pub fn account_to_legacy_config(acc: &Account, provider_name: &str) -> AccountConfig {
+    let mut map = acc
+        .cookies_json
+        .as_deref()
+        .map(cookie_entries_to_map)
+        .unwrap_or_default();
+    if let Some(u) = &acc.username {
+        map.insert("_username".into(), serde_json::Value::String(u.clone()));
+    }
+    if let Some(p) = &acc.password {
+        map.insert("_password".into(), serde_json::Value::String(p.clone()));
+    }
+    AccountConfig {
+        cookies: serde_json::Value::Object(map),
+        api_user: acc.api_user.clone(),
+        provider: provider_name.to_string(),
+        name: Some(acc.name.clone()),
+    }
 }
 
 #[cfg(test)]

@@ -140,6 +140,7 @@ impl Glass {
     /// 亮边框 rgba(140, 140, 180, 0.25)
     pub fn border_bright() -> Hsla { rgba(140, 140, 180, 0.25) }
     /// 侧边栏背景 rgba(10, 10, 20, 0.8)
+    #[allow(dead_code)] // 主题工具方法,按需使用
     pub fn sidebar() -> Hsla { rgba(10, 10, 20, 0.8) }
     /// 日志终端背景 #0d0d14
     pub fn terminal() -> Hsla { rgba(13, 13, 20, 1.0) }
@@ -185,6 +186,7 @@ impl Glass {
     }
 
     /// 柔光投影 + 主色辉光组合（用于激活 / 悬停的卡片）
+    #[allow(dead_code)] // Milestone B/C 卡片悬停态使用
     pub fn shadow_glow(color: Hsla) -> Vec<BoxShadow> {
         vec![
             BoxShadow {
@@ -224,6 +226,7 @@ impl Glass {
 /// 玻璃质感样式扩展：一行调用即可套用统一的卡片 / 面板玻璃外观
 pub trait GlassExt: Styled + Sized {
     /// 玻璃卡片：渐变背景 + 提亮描边 + 圆角 + 柔光投影
+    #[allow(dead_code)] // Milestone B/C 站点/账户卡片使用
     fn glass_card(self) -> Self {
         self.bg(Glass::card_gradient())
             .border_1()
