@@ -57,6 +57,7 @@ pub fn warn(msg: &str) { log(Level::Warn, msg); }
 #[allow(dead_code)]
 pub fn warn_f(prefix: &str, msg: &str) { log_with_prefix(Level::Warn, prefix, msg); }
 
+#[allow(dead_code)]
 pub fn error(msg: &str) { log(Level::Error, msg); }
 pub fn error_f(prefix: &str, msg: &str) { log_with_prefix(Level::Error, prefix, msg); }
 

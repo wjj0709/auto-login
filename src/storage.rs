@@ -658,6 +658,59 @@ impl Storage {
             .context("查询账户重名失败")
     }
 
+    /// 适配现有 UI/签到通路:站点 → ProviderConfig 映射(键为站点名)。
+    pub fn load_providers_for_ui(
+        &self,
+    ) -> Result<std::collections::HashMap<String, ProviderConfig>> {
+        let mut map = std::collections::HashMap::new();
+        for site in self.list_sites()? {
+            map.insert(
+                site.name.clone(),
+                ProviderConfig {
+                    name: site.name,
+                    domain: site.domain,
+                    login_path: site.login_path,
+                    sign_in_path: site.sign_in_path,
+                    user_info_path: site.user_info_path,
+                    api_user_key: site.api_user_key,
+                },
+            );
+        }
+        Ok(map)
+    }
+
+    /// 适配现有 UI/签到通路:账户 → AccountConfig 列表。
+    /// cookies 还原为 {k:v} 对象;账密以 _username/_password 注入(沿用旧偷渡约定)。
+    pub fn load_accounts_for_ui(&self) -> Result<Vec<AccountConfig>> {
+        let sites: std::collections::HashMap<i64, String> = self
+            .list_sites()?
+            .into_iter()
+            .map(|s| (s.id, s.name))
+            .collect();
+        let mut out = Vec::new();
+        for acc in self.list_all_accounts()? {
+            let mut map = acc
+                .cookies_json
+                .as_deref()
+                .map(cookie_entries_to_map)
+                .unwrap_or_default();
+            if let Some(u) = &acc.username {
+                map.insert("_username".into(), serde_json::Value::String(u.clone()));
+            }
+            if let Some(p) = &acc.password {
+                map.insert("_password".into(), serde_json::Value::String(p.clone()));
+            }
+            let Some(provider) = sites.get(&acc.site_id) else { continue };
+            out.push(AccountConfig {
+                cookies: serde_json::Value::Object(map),
+                api_user: acc.api_user,
+                provider: provider.clone(),
+                name: Some(acc.name),
+            });
+        }
+        Ok(out)
+    }
+
     /// 仅测试用:读取账户三个加密列的原始 BLOB。
     #[cfg(test)]
     #[allow(clippy::type_complexity)] // 一次性测试辅助,三列元组不值得提类型别名
@@ -1193,5 +1246,28 @@ mod tests {
         // 空 cookie:不产出空数组密文,也不记签发时间
         assert_eq!(imported[0].cookies_json, None);
         assert_eq!(imported[0].cookie_issued_at, None);
+    }
+
+    #[test]
+    fn ui_adapters_produce_legacy_shapes() {
+        let s = test_storage();
+        let providers = r#"{}"#;
+        let accounts = r#"[{"cookies":{"session":"abc","_username":"u1","_password":"p1"},
+             "api_user":"111","provider":"anyrouter","name":"用户A"}]"#;
+        s.import_from_strings(Some(providers), Some(accounts)).unwrap();
+
+        let provider_map = s.load_providers_for_ui().unwrap();
+        assert!(provider_map.contains_key("anyrouter"));
+        assert_eq!(provider_map["anyrouter"].domain, "https://anyrouter.top");
+
+        let ui_accounts = s.load_accounts_for_ui().unwrap();
+        assert_eq!(ui_accounts.len(), 1);
+        assert_eq!(ui_accounts[0].provider, "anyrouter");
+        assert_eq!(ui_accounts[0].name.as_deref(), Some("用户A"));
+        // cookies 还原为 {k:v} 对象,且重新注入 _username/_password 以保留账密登录能力
+        let map = ui_accounts[0].cookies.as_object().unwrap();
+        assert_eq!(map.get("session").and_then(|v| v.as_str()), Some("abc"));
+        assert_eq!(map.get("_username").and_then(|v| v.as_str()), Some("u1"));
+        assert_eq!(map.get("_password").and_then(|v| v.as_str()), Some("p1"));
     }
 }

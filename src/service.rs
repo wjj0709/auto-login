@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use gpui::{App, WeakEntity};
 
 use crate::app_state::{AppState, CheckInStatus, LogLevel};
-use crate::config::AppConfig;
 use crate::playwright;
 
 /// 触发全量签到（异步执行）
@@ -22,16 +21,11 @@ pub fn run_checkin_all(
     });
 
     cx.spawn(async move |cx| {
-        // 加载配置
-        let (accounts, providers) = {
-            let state = app_state.read_with(cx, |state, _cx| state.accounts.clone());
-            match state {
-                Ok(accounts) => {
-                    let config = AppConfig::load_from_env();
-                    (accounts, config.providers)
-                }
-                Err(_) => return,
-            }
+        // 加载配置(站点与账户均来自 SQLite,经 AppState 缓存)
+        let Ok((accounts, providers)) = app_state.read_with(cx, |state, _cx| {
+            (state.accounts.clone(), state.providers.clone())
+        }) else {
+            return;
         };
 
         // 逐账号标记为 Running

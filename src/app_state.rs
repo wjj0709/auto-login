@@ -1,9 +1,12 @@
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
 use gpui::SharedString;
 use chrono::Local;
 
-use crate::config::AccountConfig;
+use crate::config::{AccountConfig, ProviderConfig};
 use crate::playwright::PlaywrightResult;
+use crate::storage::Storage;
 
 /// 签到状态
 #[derive(Debug, Clone, PartialEq)]
@@ -60,6 +63,11 @@ pub struct BalanceInfo {
 pub struct AppState {
     /// 账号列表
     pub accounts: Vec<AccountConfig>,
+    /// 站点配置(来自 SQLite,键为站点名)
+    pub providers: HashMap<String, ProviderConfig>,
+    /// 数据库句柄(后续阶段界面 CRUD 使用)
+    #[allow(dead_code)] // Stage 2 界面 CRUD 接入后使用
+    pub db: Arc<Mutex<Storage>>,
     /// 各账号签到状态
     pub checkin_status: HashMap<String, CheckInStatus>,
     /// Playwright 签到结果
@@ -87,7 +95,11 @@ pub enum ActivePanel {
 
 impl AppState {
     /// 创建初始状态
-    pub fn new(accounts: Vec<AccountConfig>) -> Self {
+    pub fn new(
+        accounts: Vec<AccountConfig>,
+        providers: HashMap<String, ProviderConfig>,
+        db: Arc<Mutex<Storage>>,
+    ) -> Self {
         let mut checkin_status = HashMap::new();
         for (i, account) in accounts.iter().enumerate() {
             let name = account.get_display_name(i);
@@ -96,6 +108,8 @@ impl AppState {
 
         Self {
             accounts,
+            providers,
+            db,
             checkin_status,
             results: HashMap::new(),
             logs: Vec::new(),
