@@ -4,8 +4,8 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use gpui::{
-    AnyElement, App, Bounds, Context, Entity, IntoElement, ParentElement, Render, Styled, Window,
-    WindowBounds, WindowOptions, div, prelude::*, px, size,
+    AnyElement, App, Bounds, Context, Entity, IntoElement, MouseButton, ParentElement, Render,
+    Styled, TitlebarOptions, Window, WindowBounds, WindowOptions, div, prelude::*, px, size,
 };
 use gpui_platform::application;
 
@@ -88,43 +88,70 @@ impl RootView {
             .flex()
             .items_center()
             .justify_between()
-            .px(px(16.0))
+            .pl(px(16.0))
+            // 左侧：应用标题（可拖动区域）
             .child(
                 div()
+                    .id("titlebar-drag")
+                    .flex_1()
+                    .h_full()
+                    .flex()
+                    .items_center()
                     .text_color(theme::text_primary())
                     .text_size(px(13.0))
-                    .child("🅰 AnyRouter · Auto Check-in"),
+                    .child("🅰 AnyRouter · Auto Check-in")
+                    // 在标题空白区按下鼠标即可拖动窗口
+                    .on_mouse_down(MouseButton::Left, |_e, window, _cx| {
+                        window.start_window_move();
+                    }),
             )
+            // 右侧：一键签到按钮 + 窗口控制按钮
             .child(
                 div()
-                    .id("checkin-all-btn")
-                    .px(px(12.0))
-                    .py(px(4.0))
-                    .bg(if running {
-                        theme::bg_card()
-                    } else {
-                        theme::btn_primary_bg()
-                    })
-                    .border_1()
-                    .border_color(if running {
-                        theme::border_normal()
-                    } else {
-                        theme::btn_primary_border()
-                    })
-                    .rounded(px(5.0))
-                    .text_color(if running {
-                        theme::text_weakest()
-                    } else {
-                        theme::accent_blue()
-                    })
-                    .text_size(px(11.0))
-                    .when(!running, |this| {
-                        this.cursor_pointer().hover(|this| this.opacity(0.85))
-                    })
-                    .child(label)
-                    .on_click(move |_, _window, cx| {
-                        trigger_checkin_all(state.clone(), cx);
-                    }),
+                    .flex()
+                    .items_center()
+                    .h_full()
+                    .child(
+                        div()
+                            .id("checkin-all-btn")
+                            .px(px(12.0))
+                            .py(px(4.0))
+                            .mr(px(12.0))
+                            .bg(if running {
+                                theme::bg_card()
+                            } else {
+                                theme::btn_primary_bg()
+                            })
+                            .border_1()
+                            .border_color(if running {
+                                theme::border_normal()
+                            } else {
+                                theme::btn_primary_border()
+                            })
+                            .rounded(px(5.0))
+                            .text_color(if running {
+                                theme::text_weakest()
+                            } else {
+                                theme::accent_blue()
+                            })
+                            .text_size(px(11.0))
+                            .when(!running, |this| {
+                                this.cursor_pointer().hover(|this| this.opacity(0.85))
+                            })
+                            .child(label)
+                            .on_click(move |_, _window, cx| {
+                                trigger_checkin_all(state.clone(), cx);
+                            }),
+                    )
+                    .child(window_control("win-min", "—", theme::text_muted(), |window, _cx| {
+                        window.minimize_window();
+                    }))
+                    .child(window_control("win-max", "▢", theme::text_muted(), |window, _cx| {
+                        window.zoom_window();
+                    }))
+                    .child(window_control("win-close", "✕", theme::error_red(), |_window, cx| {
+                        cx.quit();
+                    })),
             )
             .into_any_element()
     }
@@ -692,6 +719,28 @@ fn run_checkin_account_in_thread(
     bg_running.store(false, Ordering::Relaxed);
 }
 
+/// 渲染一个窗口控制按钮（最小化/最大化/关闭）
+fn window_control(
+    id: &'static str,
+    glyph: &'static str,
+    hover_color: gpui::Hsla,
+    on_click: impl Fn(&mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    div()
+        .id(id)
+        .w(px(40.0))
+        .h(px(40.0))
+        .flex()
+        .items_center()
+        .justify_center()
+        .text_size(px(12.0))
+        .text_color(theme::text_muted())
+        .cursor_pointer()
+        .hover(move |this| this.bg(theme::bg_card()).text_color(hover_color))
+        .child(glyph)
+        .on_click(move |_, window, cx| on_click(window, cx))
+}
+
 /// GUI 入口（由 main.rs 调用）
 pub fn run_app(storage: anyrouter_core::storage::Storage) {
     let db_path = anyrouter_core::storage::Storage::default_path();
@@ -702,6 +751,12 @@ pub fn run_app(storage: anyrouter_core::storage::Storage) {
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
+                // 隐藏系统标题栏，使用自绘标题栏（最小化/最大化/关闭 + 拖动）
+                titlebar: Some(TitlebarOptions {
+                    title: Some("AnyRouter".into()),
+                    appears_transparent: true,
+                    traffic_light_position: None,
+                }),
                 ..Default::default()
             },
             |_window, cx| cx.new(|cx| RootView::new(state.clone(), cx)),
