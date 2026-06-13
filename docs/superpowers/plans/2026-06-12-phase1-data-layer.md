@@ -1399,8 +1399,21 @@ fn main() {
     if let Err(e) = storage.import_env_if_needed() {
         eprintln!("[警告] 旧配置导入失败,以现有数据继续: {e:#}");
     }
-    let accounts = storage.load_accounts_for_ui().unwrap_or_default();
-    let providers = storage.load_providers_for_ui().unwrap_or_default();
+    // 解密失败(如主密钥已更换)必须显式失败,不得 unwrap_or_default 静默清空账户列表
+    let accounts = match storage.load_accounts_for_ui() {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("[启动失败] 读取账户数据失败(主密钥可能已更换): {e:#}");
+            std::process::exit(1);
+        }
+    };
+    let providers = match storage.load_providers_for_ui() {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("[启动失败] 读取站点数据失败: {e:#}");
+            std::process::exit(1);
+        }
+    };
     let db = std::sync::Arc::new(std::sync::Mutex::new(storage));
 ```
 
