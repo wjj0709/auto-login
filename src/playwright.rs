@@ -23,6 +23,9 @@ pub struct PlaywrightAccount {
     pub cookies: serde_json::Value,
     pub username: Option<String>,
     pub password: Option<String>,
+    pub tokens_path: String,
+    pub logs_path: String,
+    pub chart_path: String,
 }
 
 /// Playwright 子进程返回的账号结果
@@ -43,6 +46,13 @@ pub struct PlaywrightResult {
     #[serde(default)]
     #[allow(dead_code)]
     pub used_login: bool,
+    /// fetch_detail 回传:令牌 / 使用日志 / 消耗图表的原始 JSON(其余 action 为 null)
+    #[serde(default)]
+    pub tokens: serde_json::Value,
+    #[serde(default)]
+    pub logs: serde_json::Value,
+    #[serde(default)]
+    pub chart: serde_json::Value,
     /// 任务结束时站点域名下的全部 cookie(Phase 3 起回传,用于落库与续期)
     #[serde(default)]
     pub cookies: Vec<CookieEntry>,
@@ -105,6 +115,9 @@ fn build_account(account: &AccountConfig, provider: &ProviderConfig, index: usiz
             .or_else(|| std::env::var(format!("ANYROUTER_USERNAME_{}", index + 1)).ok()),
         password: account_field(&account.cookies, "_password")
             .or_else(|| std::env::var(format!("ANYROUTER_PASSWORD_{}", index + 1)).ok()),
+        tokens_path: provider.tokens_path.clone(),
+        logs_path: provider.logs_path.clone(),
+        chart_path: provider.chart_path.clone(),
     }
 }
 
@@ -166,6 +179,14 @@ pub async fn run_login(
     providers: &std::collections::HashMap<String, ProviderConfig>,
 ) -> Result<Vec<PlaywrightResult>, String> {
     run_action("login", accounts, providers).await
+}
+
+/// 调用 Playwright 子进程拉取账户详情(tokens / logs / chart)。
+pub async fn run_fetch_detail(
+    accounts: &[AccountConfig],
+    providers: &std::collections::HashMap<String, ProviderConfig>,
+) -> Result<Vec<PlaywrightResult>, String> {
+    run_action("fetch_detail", accounts, providers).await
 }
 
 /// 通用子进程调用。`action` 透传给 Python 决定任务类型(checkin / login / fetch_detail)。

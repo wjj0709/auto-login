@@ -303,6 +303,7 @@ pub fn open_account_list(
                             .label("详情")
                             .on_click(move |_, window, cx| {
                                 as_detail.update(cx, |state, cx| {
+                                    state.load_detail_from_db(rid);
                                     state.view = AppView::AccountDetail(rid);
                                     cx.notify();
                                 });

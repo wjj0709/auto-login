@@ -57,6 +57,9 @@ class AccountInput:
     cookies: Any = None
     username: str | None = None
     password: str | None = None
+    tokens_path: str = "/api/token/"
+    logs_path: str = "/api/log/self"
+    chart_path: str = "/api/data/self"
 
 
 @dataclass
@@ -70,6 +73,9 @@ class AccountResult:
     used_login: bool = False
     raw_sign_in: dict | None = field(default=None)
     cookies: list = field(default_factory=list)
+    tokens: Any = None
+    logs: Any = None
+    chart: Any = None
 
 
 def parse_cookies(raw: Any) -> dict[str, str]:
@@ -243,6 +249,23 @@ async def call_sign_in(page: Page, account: AccountInput) -> tuple[bool, dict | 
     return False, data, f"sign_in failed: {data.get('msg') or data.get('message')}"
 
 
+async def fetch_json_data(page: Page, account: AccountInput, path: str, query: str) -> Any:
+    """GET 一个 new-api 接口,返回其 data 字段(或整体 body);失败返回 None。"""
+    url = f"{account.domain}{path}{query}"
+    headers = build_api_headers(account)
+    log(f"[{account.name}] GET {url}")
+    resp = await fetch_in_page(page, url, "GET", headers, None)
+    if not resp.get("ok") or resp.get("status") != 200:
+        return None
+    try:
+        data = json.loads(resp["body"])
+    except json.JSONDecodeError:
+        return None
+    if isinstance(data, dict) and "data" in data:
+        return data["data"]
+    return data
+
+
 async def perform_login(page: Page, account: AccountInput) -> tuple[bool, str | None]:
     """用账号密码 POST /api/user/login 取得 session cookie。"""
     if not (account.username and account.password):
@@ -340,6 +363,23 @@ async def process_account(
                         result.user_info = uinfo
                 else:
                     result.error = err or "登录失败"
+        elif action == "fetch_detail":
+            # 详情数据:user_info 概览 + tokens / logs / chart
+            uok, _b, uinfo, _e = await call_user_info(page, account)
+            if uok:
+                result.user_info = uinfo
+            import time as _time
+            now_ts = int(_time.time())
+            week_ago = now_ts - 7 * 86400
+            result.tokens = await fetch_json_data(page, account, account.tokens_path, "?p=1&size=100") or []
+            result.logs = await fetch_json_data(page, account, account.logs_path, "?p=1&page_size=50&type=0") or []
+            result.chart = await fetch_json_data(
+                page,
+                account,
+                account.chart_path,
+                f"?start_timestamp={week_ago}&end_timestamp={now_ts}&default_time=day",
+            ) or []
+            result.success = True
         else:
             # checkin 流程:无 session 且有账密则先登录,再签到
             ctx_cookies = await context.cookies()

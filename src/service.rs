@@ -335,3 +335,79 @@ fn persist_cookies_into_state(
         state.add_log(LogLevel::Warn, "System", "Cookie 续期写库失败");
     }
 }
+
+/// 拉取账户详情(tokens / logs / chart),写入 account_cache 并更新 detail_cache。
+pub fn run_fetch_detail(app_state: WeakEntity<AppState>, account_id: i64, cx: &mut App) {
+    let _ = app_state.update(cx, |state, cx| {
+        state.fetching_detail = Some(account_id);
+        let name = state.account_by_id(account_id).map(|a| a.name.clone()).unwrap_or_default();
+        state.add_log(LogLevel::Info, &name, "刷新详情数据中...");
+        cx.notify();
+    });
+
+    cx.spawn(async move |cx| {
+        let prepared = app_state.read_with(cx, |state, _cx| {
+            let acc = state.account_by_id(account_id)?;
+            let site = state.site_by_id(acc.site_id)?;
+            let mut cfg = account_to_legacy_config(acc, &site.name);
+            cfg.name = Some(account_id.to_string());
+            let mut providers: HashMap<String, ProviderConfig> = HashMap::new();
+            providers.insert(site.name.clone(), site_to_provider_config(site));
+            Some((cfg, providers))
+        });
+
+        let Ok(Some((cfg, providers))) = prepared else {
+            let _ = app_state.update(cx, |state, cx| {
+                state.fetching_detail = None;
+                cx.notify();
+            });
+            return;
+        };
+
+        let result = playwright::run_fetch_detail(&[cfg], &providers).await;
+
+        let _ = app_state.update(cx, |state, cx| {
+            state.fetching_detail = None;
+            let name = state.account_by_id(account_id).map(|a| a.name.clone()).unwrap_or_default();
+            match result {
+                Ok(mut results) => match results.pop() {
+                    Some(r) if r.success => {
+                        let tokens_json = serde_json::to_string(&r.tokens).unwrap_or_else(|_| "[]".into());
+                        let logs_json = serde_json::to_string(&r.logs).unwrap_or_else(|_| "[]".into());
+                        let chart_json = serde_json::to_string(&r.chart).unwrap_or_else(|_| "[]".into());
+                        // tokens 含完整密钥,加密存储;logs / chart 明文
+                        if let Ok(guard) = state.db.lock() {
+                            let _ = guard.set_cache(account_id, "tokens", &tokens_json, true);
+                            let _ = guard.set_cache(account_id, "logs", &logs_json, false);
+                            let _ = guard.set_cache(account_id, "chart", &chart_json, false);
+                        }
+                        let cookies = r.cookies.clone();
+                        persist_cookies_into_state(state, account_id, &cookies, false);
+                        state.set_detail(
+                            account_id,
+                            crate::app_state::DetailData {
+                                tokens_json,
+                                logs_json,
+                                chart_json,
+                                fetched_at: crate::storage::now_iso(),
+                            },
+                        );
+                        state.add_log(LogLevel::Success, &name, "详情数据已更新");
+                    }
+                    Some(r) => {
+                        let e = r.error.unwrap_or_else(|| "拉取失败".into());
+                        state.add_log(LogLevel::Error, &name, &format!("详情拉取失败: {}", e));
+                    }
+                    None => {
+                        state.add_log(LogLevel::Error, &name, "拉取器未返回结果");
+                    }
+                },
+                Err(e) => {
+                    state.add_log(LogLevel::Error, &name, &format!("拉取器运行失败: {}", e));
+                }
+            }
+            cx.notify();
+        });
+    })
+    .detach();
+}

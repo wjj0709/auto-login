@@ -17,12 +17,21 @@ pub struct ProviderConfig {
     pub user_info_path: String,
     #[serde(default = "default_api_user_key")]
     pub api_user_key: String,
+    #[serde(default = "default_tokens_path")]
+    pub tokens_path: String,
+    #[serde(default = "default_logs_path")]
+    pub logs_path: String,
+    #[serde(default = "default_chart_path")]
+    pub chart_path: String,
 }
 
 fn default_login_path() -> String { "/login".to_string() }
 fn default_sign_in_path() -> Option<String> { Some("/api/user/sign_in".to_string()) }
 fn default_user_info_path() -> String { "/api/user/self".to_string() }
 fn default_api_user_key() -> String { "new-api-user".to_string() }
+fn default_tokens_path() -> String { "/api/token/".to_string() }
+fn default_logs_path() -> String { "/api/log/self".to_string() }
+fn default_chart_path() -> String { "/api/data/self".to_string() }
 
 impl ProviderConfig {
     #[allow(dead_code)]

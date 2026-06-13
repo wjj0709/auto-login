@@ -658,6 +658,51 @@ impl Storage {
             .context("查询账户重名失败")
     }
 
+    /// 写入 / 覆盖账户详情缓存。`encrypt=true`(如 tokens 含完整密钥)时
+    /// payload 以 base64(AES-GCM) 存储,encrypted=1。
+    pub fn set_cache(&self, account_id: i64, kind: &str, payload: &str, encrypt: bool) -> Result<()> {
+        use base64::engine::general_purpose::STANDARD;
+        let (stored, enc_flag) = if encrypt {
+            (STANDARD.encode(self.crypto.encrypt(payload)?), 1)
+        } else {
+            (payload.to_string(), 0)
+        };
+        self.conn
+            .execute(
+                "INSERT INTO account_cache(account_id, kind, payload, encrypted, fetched_at)
+                 VALUES(?1,?2,?3,?4,?5)
+                 ON CONFLICT(account_id, kind) DO UPDATE SET
+                    payload=excluded.payload, encrypted=excluded.encrypted, fetched_at=excluded.fetched_at",
+                rusqlite::params![account_id, kind, stored, enc_flag, now_iso()],
+            )
+            .with_context(|| format!("写入缓存失败 account={account_id} kind={kind}"))?;
+        Ok(())
+    }
+
+    /// 读取账户详情缓存,返回 (payload 明文, fetched_at);加密缓存自动解密。
+    pub fn get_cache(&self, account_id: i64, kind: &str) -> Result<Option<(String, String)>> {
+        let row = self
+            .conn
+            .query_row(
+                "SELECT payload, encrypted, fetched_at FROM account_cache WHERE account_id=?1 AND kind=?2",
+                rusqlite::params![account_id, kind],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?)),
+            )
+            .optional()
+            .context("读取缓存失败")?;
+        let Some((payload, enc, fetched_at)) = row else {
+            return Ok(None);
+        };
+        let plain = if enc == 1 {
+            use base64::engine::general_purpose::STANDARD;
+            let blob = STANDARD.decode(payload.trim()).context("缓存 base64 解码失败")?;
+            self.crypto.decrypt(&blob).context("缓存解密失败")?
+        } else {
+            payload
+        };
+        Ok(Some((plain, fetched_at)))
+    }
+
     /// 适配现有 UI/签到通路:站点 → ProviderConfig 映射(键为站点名)。
     #[allow(dead_code)] // 旧适配入口;新通路直接用 site_to_provider_config
     pub fn load_providers_for_ui(
@@ -794,6 +839,9 @@ pub fn site_to_provider_config(site: &Site) -> ProviderConfig {
         sign_in_path: site.sign_in_path.clone(),
         user_info_path: site.user_info_path.clone(),
         api_user_key: site.api_user_key.clone(),
+        tokens_path: site.tokens_path.clone(),
+        logs_path: site.logs_path.clone(),
+        chart_path: site.chart_path.clone(),
     }
 }
 
@@ -1279,5 +1327,49 @@ mod tests {
         assert_eq!(map.get("session").and_then(|v| v.as_str()), Some("abc"));
         assert_eq!(map.get("_username").and_then(|v| v.as_str()), Some("u1"));
         assert_eq!(map.get("_password").and_then(|v| v.as_str()), Some("p1"));
+    }
+
+    #[test]
+    fn cache_set_get_plain_and_encrypted() {
+        let s = test_storage();
+        let site = s.insert_site(&SiteInput::with_defaults("A", "https://a.com")).unwrap();
+        let aid = s.insert_account(&sample_account(site, "用户A")).unwrap();
+
+        // 明文缓存
+        s.set_cache(aid, "logs", r#"[{"x":1}]"#, false).unwrap();
+        let (p, ts) = s.get_cache(aid, "logs").unwrap().expect("应有缓存");
+        assert_eq!(p, r#"[{"x":1}]"#);
+        assert!(!ts.is_empty());
+
+        // 加密缓存(tokens):库内不得出现明文
+        s.set_cache(aid, "tokens", r#"[{"key":"sk-secret"}]"#, true).unwrap();
+        let (p2, _) = s.get_cache(aid, "tokens").unwrap().unwrap();
+        assert_eq!(p2, r#"[{"key":"sk-secret"}]"#);
+        let raw: String = s
+            .conn
+            .query_row(
+                "SELECT payload FROM account_cache WHERE account_id=?1 AND kind='tokens'",
+                [aid],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(!raw.contains("sk-secret"), "加密缓存不得明文落库");
+
+        // 覆盖写
+        s.set_cache(aid, "logs", "[]", false).unwrap();
+        assert_eq!(s.get_cache(aid, "logs").unwrap().unwrap().0, "[]");
+
+        // 不存在
+        assert!(s.get_cache(aid, "chart").unwrap().is_none());
+    }
+
+    #[test]
+    fn cache_cascades_on_account_delete() {
+        let s = test_storage();
+        let site = s.insert_site(&SiteInput::with_defaults("A", "https://a.com")).unwrap();
+        let aid = s.insert_account(&sample_account(site, "用户A")).unwrap();
+        s.set_cache(aid, "logs", "[]", false).unwrap();
+        s.delete_account(aid).unwrap();
+        assert!(s.get_cache(aid, "logs").unwrap().is_none());
     }
 }

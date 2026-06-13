@@ -3,6 +3,7 @@ mod account_modal;
 mod app_state;
 mod assets;
 mod balance;
+mod chart;
 mod checkin;
 mod config;
 mod cookie;

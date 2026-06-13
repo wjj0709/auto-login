@@ -56,6 +56,15 @@ pub struct BalanceInfo {
     pub usage_increase: f64,
 }
 
+/// 账户详情缓存(tokens / logs / chart 原始 JSON 文本,渲染时按需解析)。
+#[derive(Debug, Clone, Default)]
+pub struct DetailData {
+    pub tokens_json: String,
+    pub logs_json: String,
+    pub chart_json: String,
+    pub fetched_at: String,
+}
+
 /// 当前整页视图。详情页通过面包屑返回主页。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AppView {
@@ -91,6 +100,10 @@ pub struct AppState {
 
     /// 当前整页视图
     pub view: AppView,
+    /// 账户详情缓存(tokens/logs/chart),键为 account_id
+    pub detail_cache: HashMap<i64, DetailData>,
+    /// 正在刷新详情数据的账户(按钮加载态)
+    pub fetching_detail: Option<i64>,
 }
 
 impl AppState {
@@ -113,6 +126,8 @@ impl AppState {
             success_count: 0,
             fail_count: 0,
             view: AppView::Home,
+            detail_cache: HashMap::new(),
+            fetching_detail: None,
         }
     }
 
@@ -171,6 +186,46 @@ impl AppState {
     #[allow(dead_code)] // 由界面层使用
     pub fn balance_of(&self, account_id: i64) -> Option<&BalanceInfo> {
         self.balances.get(&account_id)
+    }
+
+    /// 取某账户的详情缓存
+    pub fn detail_of(&self, account_id: i64) -> Option<&DetailData> {
+        self.detail_cache.get(&account_id)
+    }
+
+    /// 写入详情缓存
+    pub fn set_detail(&mut self, account_id: i64, data: DetailData) {
+        self.detail_cache.insert(account_id, data);
+    }
+
+    /// 从数据库读取该账户的缓存,填充 detail_cache(详情页打开时调用)。
+    pub fn load_detail_from_db(&mut self, account_id: i64) {
+        let db = self.db.clone();
+        let Ok(guard) = db.lock() else {
+            return;
+        };
+        let tokens = guard.get_cache(account_id, "tokens").ok().flatten();
+        let logs = guard.get_cache(account_id, "logs").ok().flatten();
+        let chart = guard.get_cache(account_id, "chart").ok().flatten();
+        drop(guard);
+        if tokens.is_none() && logs.is_none() && chart.is_none() {
+            return;
+        }
+        let fetched_at = tokens
+            .as_ref()
+            .or(logs.as_ref())
+            .or(chart.as_ref())
+            .map(|(_, t)| t.clone())
+            .unwrap_or_default();
+        self.detail_cache.insert(
+            account_id,
+            DetailData {
+                tokens_json: tokens.map(|(p, _)| p).unwrap_or_else(|| "[]".into()),
+                logs_json: logs.map(|(p, _)| p).unwrap_or_else(|| "[]".into()),
+                chart_json: chart.map(|(p, _)| p).unwrap_or_else(|| "[]".into()),
+                fetched_at,
+            },
+        );
     }
 
     /// 用最新的 sites/accounts 覆盖,并同步状态键(界面 CRUD 后调用)。
