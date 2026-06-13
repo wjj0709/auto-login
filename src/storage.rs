@@ -527,6 +527,75 @@ impl Storage {
     }
 }
 
+/// 从域名/URL 提取 host(含端口),供 cookie 的 domain 字段使用。
+#[allow(dead_code)] // Task 7 .env 导入接入后使用
+pub fn host_of(domain: &str) -> &str {
+    let no_scheme = domain
+        .strip_prefix("https://")
+        .or_else(|| domain.strip_prefix("http://"))
+        .unwrap_or(domain);
+    no_scheme.split('/').next().unwrap_or(no_scheme)
+}
+
+/// 旧格式 cookies(对象或 "k=v; " 串)→ (结构化数组, _username, _password)。
+/// 手动录入/导入场景:expires 置 -1(未知),domain 取站点 host。
+#[allow(dead_code)] // Task 7 .env 导入接入后使用
+pub fn cookies_value_to_entries(
+    raw: &serde_json::Value,
+    domain_host: &str,
+) -> (Vec<serde_json::Value>, Option<String>, Option<String>) {
+    let mut pairs: Vec<(String, String)> = Vec::new();
+    match raw {
+        serde_json::Value::Object(map) => {
+            for (k, v) in map {
+                if let Some(s) = v.as_str() {
+                    pairs.push((k.clone(), s.to_string()));
+                }
+            }
+        }
+        serde_json::Value::String(s) => {
+            for part in s.split(';') {
+                if let Some((k, v)) = part.split_once('=') {
+                    pairs.push((k.trim().to_string(), v.trim().to_string()));
+                }
+            }
+        }
+        _ => {}
+    }
+
+    let mut username = None;
+    let mut password = None;
+    let mut entries = Vec::new();
+    for (k, v) in pairs {
+        match k.as_str() {
+            "_username" => username = Some(v),
+            "_password" => password = Some(v),
+            _ => entries.push(serde_json::json!({
+                "name": k, "value": v,
+                "domain": domain_host, "path": "/",
+                "expires": -1, "httpOnly": false, "secure": true,
+            })),
+        }
+    }
+    (entries, username, password)
+}
+
+/// 结构化数组 JSON 文本 → {name: value} 对象(现有 Playwright 通路的格式)。
+#[allow(dead_code)] // Task 8 应用接线接入后使用
+pub fn cookie_entries_to_map(entries_json: &str) -> serde_json::Map<String, serde_json::Value> {
+    let mut map = serde_json::Map::new();
+    if let Ok(serde_json::Value::Array(arr)) = serde_json::from_str(entries_json) {
+        for e in arr {
+            if let (Some(name), Some(value)) =
+                (e.get("name").and_then(|v| v.as_str()), e.get("value").and_then(|v| v.as_str()))
+            {
+                map.insert(name.to_string(), serde_json::Value::String(value.to_string()));
+            }
+        }
+    }
+    map
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -813,5 +882,49 @@ mod tests {
         // key A 重新打开仍应成功(校验不得破坏数据)
         drop(Storage::open_at(&path, Crypto::from_key(&[7u8; 32])).unwrap());
         std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn cookie_value_to_entries_extracts_credentials() {
+        let raw = serde_json::json!({
+            "session": "abc", "acw_tc": "x",
+            "_username": "alice", "_password": "p@ss"
+        });
+        let (entries, username, password) =
+            cookies_value_to_entries(&raw, "anyrouter.top");
+        assert_eq!(username.as_deref(), Some("alice"));
+        assert_eq!(password.as_deref(), Some("p@ss"));
+        assert_eq!(entries.len(), 2); // _username/_password 不进 cookie
+        let session = entries.iter().find(|e| e["name"] == "session").unwrap();
+        assert_eq!(session["value"], "abc");
+        assert_eq!(session["domain"], "anyrouter.top");
+        assert_eq!(session["expires"], -1);
+    }
+
+    #[test]
+    fn cookie_string_to_entries() {
+        let raw = serde_json::json!("session=abc; acw_tc=x");
+        let (entries, username, password) = cookies_value_to_entries(&raw, "a.com");
+        assert_eq!(username, None);
+        assert_eq!(password, None);
+        assert_eq!(entries.len(), 2);
+    }
+
+    #[test]
+    fn cookie_entries_to_map_roundtrip() {
+        let raw = serde_json::json!({"session": "abc", "k": "v"});
+        let (entries, _, _) = cookies_value_to_entries(&raw, "a.com");
+        let json = serde_json::to_string(&entries).unwrap();
+        let map = cookie_entries_to_map(&json);
+        assert_eq!(map.get("session").and_then(|v| v.as_str()), Some("abc"));
+        assert_eq!(map.get("k").and_then(|v| v.as_str()), Some("v"));
+    }
+
+    #[test]
+    fn host_of_strips_scheme_and_path() {
+        assert_eq!(host_of("https://anyrouter.top"), "anyrouter.top");
+        assert_eq!(host_of("https://a.com/path"), "a.com");
+        assert_eq!(host_of("http://a.com:8080"), "a.com:8080");
+        assert_eq!(host_of("a.com"), "a.com");
     }
 }
