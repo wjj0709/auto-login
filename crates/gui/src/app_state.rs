@@ -82,6 +82,19 @@ pub struct AppState {
 }
 
 impl AppState {
+    /// 从 Storage 构建初始 AppState（首次启动时调用）
+    pub fn from_storage(storage: Storage) -> Self {
+        let mut state = Self::default();
+        state.storage = Some(storage);
+        state.reload_sites();
+        state.log_entries.push(LogEntry {
+            timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
+            level: LogLevel::Info,
+            message: format!("已加载 {} 个站点", state.sites.len()),
+        });
+        state
+    }
+
     /// 从 Storage 加载站点列表（含统计信息）
     pub fn reload_sites(&mut self) {
         if let Some(ref storage) = self.storage {

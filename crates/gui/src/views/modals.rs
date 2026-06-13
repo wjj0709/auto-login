@@ -1,597 +1,179 @@
-use egui::{self, Align2, Color32, RichText, Stroke, Vec2};
+use gpui::{AnyElement, Context, Entity, IntoElement, ParentElement, Styled, div, prelude::*, px};
 
-use anyrouter_core::models::{AccountInput, SiteInput};
-use crate::app_state::{AppState, DeleteTarget, LogEntry, LogLevel, ModalKind, ViewKind};
+use crate::app_state::{AppState, DeleteTarget, ModalKind};
 use crate::theme;
+use crate::views::root::RootView;
 
-/// 渲染当前活动弹窗（如果有）
-pub fn render_modals(ctx: &egui::Context, state: &mut AppState) {
-    let modal = match &state.active_modal {
-        Some(m) => m.clone(),
-        None => return,
-    };
-
-    // 半透明遮罩层
-    egui::Area::new(egui::Id::new("modal_overlay"))
-        .fixed_pos(egui::pos2(0.0, 0.0))
-        .order(egui::Order::Background)
-        .show(ctx, |ui| {
-            let screen = ctx.screen_rect();
-            let (resp, painter) =
-                ui.allocate_painter(screen.size(), egui::Sense::click());
-            painter.rect_filled(screen, 0.0, Color32::from_rgba_unmultiplied(0, 0, 0, 180));
-            // 点击遮罩关闭弹窗
-            if resp.clicked() {
-                state.active_modal = None;
-            }
-        });
-
-    match modal {
-        ModalKind::AccountList(site_id) => render_account_list_modal(ctx, state, site_id),
-        ModalKind::SiteForm(site_id) => render_site_form_modal(ctx, state, site_id),
-        ModalKind::AccountForm {
-            site_id,
-            account_id,
-        } => render_account_form_modal(ctx, state, site_id, account_id),
-        ModalKind::ConfirmDelete(target) => render_confirm_delete_modal(ctx, state, target),
-    }
-}
-
-/// 账户列表弹窗
-fn render_account_list_modal(ctx: &egui::Context, state: &mut AppState, site_id: i64) {
-    let site_name = state
-        .sites
-        .iter()
-        .find(|s| s.site.id == site_id)
-        .map(|s| s.site.name.clone())
-        .unwrap_or_else(|| "未知站点".into());
-
-    // 从数据库加载账户
-    let accounts = state
-        .storage
-        .as_ref()
-        .and_then(|s| s.list_accounts_by_site(site_id).ok())
-        .unwrap_or_default();
-
-    egui::Window::new(format!("{} \u{00b7} 账户管理", site_name))
-        .id(egui::Id::new("modal_account_list"))
-        .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
-        .resizable(false)
-        .collapsible(false)
-        .min_width(480.0)
-        .frame(
-            egui::Frame::new()
-                .fill(theme::CARD_BG)
-                .stroke(Stroke::new(1.0, theme::BORDER_ACCENT))
-                .corner_radius(10.0)
-                .inner_margin(egui::Margin::same(20)),
-        )
-        .show(ctx, |ui| {
-            ui.set_min_width(460.0);
-
-            if accounts.is_empty() {
-                ui.label(
-                    RichText::new("暂无账户，点击下方按钮新增")
-                        .size(14.0)
-                        .color(theme::TEXT_MUTED),
-                );
-                ui.add_space(8.0);
-            }
-
-            for acc in &accounts {
-                ui.horizontal(|ui| {
-                    // 账户名
-                    ui.label(
-                        RichText::new(&acc.name)
-                            .size(14.0)
-                            .color(theme::TEXT_PRIMARY),
-                    );
-
-                    ui.add_space(8.0);
-
-                    // Cookie 状态
-                    let cookie_valid = acc.cookies.is_some();
-                    let (status_text, status_color) = if cookie_valid {
-                        ("有效", theme::SUCCESS_GREEN)
-                    } else {
-                        ("无Cookie", theme::ERROR_RED)
-                    };
-                    ui.label(RichText::new(status_text).size(12.0).color(status_color));
-
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        // 删除
-                        let del_btn = egui::Button::new(
-                            RichText::new("删除").size(12.0).color(theme::ERROR_RED),
-                        )
-                        .fill(Color32::TRANSPARENT)
-                        .stroke(Stroke::NONE);
-                        if ui.add(del_btn).clicked() {
-                            state.active_modal =
-                                Some(ModalKind::ConfirmDelete(DeleteTarget::Account {
-                                    id: acc.id,
-                                    name: acc.name.clone(),
-                                }));
-                        }
-
-                        // 编辑
-                        let edit_btn = egui::Button::new(
-                            RichText::new("编辑").size(12.0).color(theme::TEXT_MUTED),
-                        )
-                        .fill(Color32::TRANSPARENT)
-                        .stroke(Stroke::NONE);
-                        if ui.add(edit_btn).clicked() {
-                            // 预填表单
-                            state.form_account_name = acc.name.clone();
-                            state.form_account_api_user = acc.api_user.clone();
-                            state.form_account_cookie = acc.cookies.clone().unwrap_or_default();
-                            state.form_account_username = acc.username.clone().unwrap_or_default();
-                            state.form_account_password = acc.password.clone().unwrap_or_default();
-                            state.active_modal = Some(ModalKind::AccountForm {
-                                site_id,
-                                account_id: Some(acc.id),
-                            });
-                        }
-
-                        // 详情
-                        let detail_btn = egui::Button::new(
-                            RichText::new("详情")
-                                .size(12.0)
-                                .color(theme::ACCENT_BLUE),
-                        )
-                        .fill(Color32::TRANSPARENT)
-                        .stroke(Stroke::NONE);
-                        if ui.add(detail_btn).clicked() {
-                            state.current_view = ViewKind::AccountDetail(acc.id);
-                            state.active_modal = None;
-                        }
-                    });
-                });
-                ui.add_space(4.0);
-                ui.separator();
-                ui.add_space(4.0);
-            }
-
-            ui.add_space(12.0);
-
-            // 底部按钮行
-            ui.horizontal(|ui| {
-                let add_btn = egui::Button::new(
-                    RichText::new("+ 新增账户")
-                        .size(13.0)
-                        .color(theme::ACCENT_BLUE),
-                )
-                .fill(theme::BTN_PRIMARY_BG)
-                .stroke(Stroke::new(1.0, theme::BTN_PRIMARY_BORDER));
-                if ui.add(add_btn).clicked() {
-                    // 清空表单
-                    state.form_account_name.clear();
-                    state.form_account_api_user.clear();
-                    state.form_account_cookie.clear();
-                    state.form_account_username.clear();
-                    state.form_account_password.clear();
-                    state.active_modal = Some(ModalKind::AccountForm {
-                        site_id,
-                        account_id: None,
-                    });
-                }
-
-                ui.add_space(12.0);
-
-                let checkin_btn = egui::Button::new(
-                    RichText::new("\u{26a1} 签到本站点")
-                        .size(13.0)
-                        .color(theme::WARNING_YELLOW),
-                )
-                .fill(Color32::TRANSPARENT)
-                .stroke(Stroke::new(1.0, theme::BORDER_ACCENT));
-                if ui.add(checkin_btn).clicked() {
-                    state.log_entries.push(LogEntry {
-                        timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
-                        level: LogLevel::Info,
-                        message: format!("触发站点 {} 签到...", site_name),
-                    });
-                }
-            });
-        });
-}
-
-/// 站点表单弹窗
-fn render_site_form_modal(ctx: &egui::Context, state: &mut AppState, site_id: Option<i64>) {
-    let title = if site_id.is_some() {
-        "编辑站点"
-    } else {
-        "新建站点"
-    };
-
-    egui::Window::new(title)
-        .id(egui::Id::new("modal_site_form"))
-        .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
-        .resizable(false)
-        .collapsible(false)
-        .min_width(420.0)
-        .frame(
-            egui::Frame::new()
-                .fill(theme::CARD_BG)
-                .stroke(Stroke::new(1.0, theme::BORDER_ACCENT))
-                .corner_radius(10.0)
-                .inner_margin(egui::Margin::same(20)),
-        )
-        .show(ctx, |ui| {
-            ui.set_min_width(400.0);
-
-            // 站点名称
-            ui.label(RichText::new("站点名称 *").size(13.0).color(theme::TEXT_SECONDARY));
-            let mut site_name_buf = state.form_site_name.clone();
-            let name_resp = ui.add(
-                egui::TextEdit::singleline(&mut site_name_buf)
-                    .desired_width(380.0)
-                    .hint_text("例如: AnyRouter"),
-            );
-            if name_resp.changed() {
-                state.form_site_name = site_name_buf;
-            }
-            ui.add_space(8.0);
-
-            // 域名
-            ui.label(RichText::new("域名 *").size(13.0).color(theme::TEXT_SECONDARY));
-            let mut domain_buf = state.form_site_domain.clone();
-            let domain_resp = ui.add(
-                egui::TextEdit::singleline(&mut domain_buf)
-                    .desired_width(380.0)
-                    .hint_text("例如: https://anyrouter.top"),
-            );
-            if domain_resp.changed() {
-                state.form_site_domain = domain_buf;
-            }
-            ui.add_space(12.0);
-
-            // 高级设置折叠区
-            egui::CollapsingHeader::new(
-                RichText::new("高级设置").size(13.0).color(theme::TEXT_MUTED),
-            )
-            .show(ui, |ui| {
-                ui.label(RichText::new("登录路径、签到路径、API 用户标识等...").size(12.0).color(theme::TEXT_WEAKEST));
-                ui.label(RichText::new("（保存时使用默认值）").size(12.0).color(theme::TEXT_WEAKEST));
-            });
-
-            ui.add_space(16.0);
-
-            // 底部按钮
-            ui.horizontal(|ui| {
-                let cancel_btn = egui::Button::new(
-                    RichText::new("取消").size(13.0).color(theme::TEXT_MUTED),
-                )
-                .fill(Color32::TRANSPARENT)
-                .stroke(Stroke::new(1.0, theme::BORDER_NORMAL));
-                if ui.add(cancel_btn).clicked() {
-                    state.active_modal = None;
-                }
-
-                ui.add_space(12.0);
-
-                let save_btn = egui::Button::new(
-                    RichText::new("保存").size(13.0).color(theme::ACCENT_BLUE),
-                )
-                .fill(theme::BTN_PRIMARY_BG)
-                .stroke(Stroke::new(1.0, theme::BTN_PRIMARY_BORDER));
-                if ui.add(save_btn).clicked() {
-                    // 执行保存操作
-                    let input = SiteInput {
-                        name: state.form_site_name.clone(),
-                        domain: state.form_site_domain.clone(),
-                        login_path: "/auth/login".to_string(),
-                        sign_in_path: None,
-                        user_info_path: "/api/user/getSubInfo".to_string(),
-                        tokens_path: "/api/user/getSubTokens".to_string(),
-                        logs_path: "/api/user/getSubLogs".to_string(),
-                        chart_path: "/api/user/getSubChart".to_string(),
-                        api_user_key: "user".to_string(),
-                    };
-
-                    if let Some(ref storage) = state.storage {
-                        let result = if let Some(id) = site_id {
-                            storage.update_site(id, &input).map(|_| ())
-                        } else {
-                            storage.insert_site(&input).map(|_| ())
-                        };
-
-                        match result {
-                            Ok(()) => {
-                                state.log_entries.push(LogEntry {
-                                    timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
-                                    level: LogLevel::Success,
-                                    message: format!("站点 \"{}\" 保存成功", input.name),
-                                });
-                            }
-                            Err(e) => {
-                                state.log_entries.push(LogEntry {
-                                    timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
-                                    level: LogLevel::Error,
-                                    message: format!("站点保存失败: {}", e),
-                                });
-                            }
-                        }
-                    }
-
-                    // 刷新站点列表
-                    state.reload_sites();
-                    state.active_modal = None;
-                }
-            });
-        });
-}
-
-/// 账户表单弹窗
-fn render_account_form_modal(
-    ctx: &egui::Context,
-    state: &mut AppState,
-    site_id: i64,
-    account_id: Option<i64>,
-) {
-    let title = if account_id.is_some() {
-        "编辑账户"
-    } else {
-        "新增账户"
-    };
-
-    egui::Window::new(title)
-        .id(egui::Id::new("modal_account_form"))
-        .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
-        .resizable(false)
-        .collapsible(false)
-        .min_width(420.0)
-        .frame(
-            egui::Frame::new()
-                .fill(theme::CARD_BG)
-                .stroke(Stroke::new(1.0, theme::BORDER_ACCENT))
-                .corner_radius(10.0)
-                .inner_margin(egui::Margin::same(20)),
-        )
-        .show(ctx, |ui| {
-            ui.set_min_width(400.0);
-
-            // 账户名称
-            ui.label(RichText::new("账户名称 *").size(13.0).color(theme::TEXT_SECONDARY));
-            let mut name_buf = state.form_account_name.clone();
-            let name_resp = ui.add(
-                egui::TextEdit::singleline(&mut name_buf)
-                    .desired_width(380.0)
-                    .hint_text("例如: alice@example.com"),
-            );
-            if name_resp.changed() {
-                state.form_account_name = name_buf;
-            }
-            ui.add_space(8.0);
-
-            // API 用户标识
-            ui.label(RichText::new("API 用户标识 *").size(13.0).color(theme::TEXT_SECONDARY));
-            let mut user_buf = state.form_account_api_user.clone();
-            let user_resp = ui.add(
-                egui::TextEdit::singleline(&mut user_buf)
-                    .desired_width(380.0)
-                    .hint_text("用于 API 请求的用户标识"),
-            );
-            if user_resp.changed() {
-                state.form_account_api_user = user_buf;
-            }
-            ui.add_space(12.0);
-
-            // 凭据区域
-            ui.label(RichText::new("凭据").size(13.0).color(theme::TEXT_SECONDARY));
-            ui.add_space(4.0);
-
-            ui.label(RichText::new("Cookie").size(12.0).color(theme::TEXT_MUTED));
-            let mut cookie_buf = state.form_account_cookie.clone();
-            let cookie_resp = ui.add(
-                egui::TextEdit::multiline(&mut cookie_buf)
-                    .desired_width(380.0)
-                    .desired_rows(3)
-                    .hint_text("粘贴 Cookie 字符串..."),
-            );
-            if cookie_resp.changed() {
-                state.form_account_cookie = cookie_buf;
-            }
-            ui.add_space(8.0);
-
-            ui.label(RichText::new("或 用户名 + 密码").size(12.0).color(theme::TEXT_MUTED));
-            let mut uname_buf = state.form_account_username.clone();
-            let uname_resp = ui.add(
-                egui::TextEdit::singleline(&mut uname_buf)
-                    .desired_width(380.0)
-                    .hint_text("用户名"),
-            );
-            if uname_resp.changed() {
-                state.form_account_username = uname_buf;
-            }
-            let mut pwd_buf = state.form_account_password.clone();
-            let pwd_resp = ui.add(
-                egui::TextEdit::singleline(&mut pwd_buf)
-                    .desired_width(380.0)
-                    .hint_text("密码")
-                    .password(true),
-            );
-            if pwd_resp.changed() {
-                state.form_account_password = pwd_buf;
-            }
-
-            ui.add_space(16.0);
-
-            // 底部按钮
-            ui.horizontal(|ui| {
-                let cancel_btn = egui::Button::new(
-                    RichText::new("取消").size(13.0).color(theme::TEXT_MUTED),
-                )
-                .fill(Color32::TRANSPARENT)
-                .stroke(Stroke::new(1.0, theme::BORDER_NORMAL));
-                if ui.add(cancel_btn).clicked() {
-                    state.active_modal = None;
-                }
-
-                ui.add_space(12.0);
-
-                let save_btn = egui::Button::new(
-                    RichText::new("保存").size(13.0).color(theme::ACCENT_BLUE),
-                )
-                .fill(theme::BTN_PRIMARY_BG)
-                .stroke(Stroke::new(1.0, theme::BTN_PRIMARY_BORDER));
-                if ui.add(save_btn).clicked() {
-                    let input = AccountInput {
-                        site_id,
-                        name: state.form_account_name.clone(),
-                        api_user: state.form_account_api_user.clone(),
-                        username: if state.form_account_username.is_empty() {
-                            None
-                        } else {
-                            Some(state.form_account_username.clone())
-                        },
-                        password: if state.form_account_password.is_empty() {
-                            None
-                        } else {
-                            Some(state.form_account_password.clone())
-                        },
-                        cookies: if state.form_account_cookie.is_empty() {
-                            None
-                        } else {
-                            Some(state.form_account_cookie.clone())
-                        },
-                    };
-
-                    if let Some(ref storage) = state.storage {
-                        let result = if let Some(id) = account_id {
-                            storage.update_account(id, &input).map(|_| ())
-                        } else {
-                            storage.insert_account(&input).map(|_| ())
-                        };
-
-                        match result {
-                            Ok(()) => {
-                                state.log_entries.push(LogEntry {
-                                    timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
-                                    level: LogLevel::Success,
-                                    message: format!("账户 \"{}\" 保存成功", input.name),
-                                });
-                            }
-                            Err(e) => {
-                                state.log_entries.push(LogEntry {
-                                    timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
-                                    level: LogLevel::Error,
-                                    message: format!("账户保存失败: {}", e),
-                                });
-                            }
-                        }
-                    }
-
-                    // 刷新站点列表
-                    state.reload_sites();
-                    state.active_modal = None;
-                }
-            });
-        });
-}
-
-/// 确认删除弹窗
-fn render_confirm_delete_modal(
-    ctx: &egui::Context,
-    state: &mut AppState,
-    target: DeleteTarget,
-) {
-    let description = match &target {
-        DeleteTarget::Site {
-            name,
-            account_count,
-            ..
-        } => format!(
-            "确定删除站点 \"{}\"？将同时删除其下 {} 个账户及所有关联数据。此操作不可恢复。",
-            name, account_count
+pub fn render(state: Entity<AppState>, cx: &mut Context<RootView>) -> AnyElement {
+    let modal = state.read(cx).active_modal.clone();
+    let (title, body_text) = match &modal {
+        Some(ModalKind::AccountList(site_id)) => (
+            format!("站点 #{} · 账户管理", site_id),
+            "账户列表 — 完整功能待实现".to_string(),
         ),
-        DeleteTarget::Account { name, .. } => {
-            format!("确定删除账户 \"{}\"？此操作不可恢复。", name)
-        }
+        Some(ModalKind::SiteForm(None)) => (
+            "新建站点".to_string(),
+            "站点表单 — 完整功能待实现".to_string(),
+        ),
+        Some(ModalKind::SiteForm(Some(id))) => (
+            format!("编辑站点 #{}", id),
+            "站点表单 — 完整功能待实现".to_string(),
+        ),
+        Some(ModalKind::AccountForm { account_id: None, .. }) => (
+            "新增账户".to_string(),
+            "账户表单 — 完整功能待实现".to_string(),
+        ),
+        Some(ModalKind::AccountForm {
+            account_id: Some(id),
+            ..
+        }) => (
+            format!("编辑账户 #{}", id),
+            "账户表单 — 完整功能待实现".to_string(),
+        ),
+        Some(ModalKind::ConfirmDelete(target)) => match target {
+            DeleteTarget::Site {
+                name,
+                account_count,
+                ..
+            } => (
+                "⚠ 删除确认".to_string(),
+                format!(
+                    "确定删除站点「{}」？将同时删除其下 {} 个账户及全部缓存数据，此操作不可恢复。",
+                    name, account_count
+                ),
+            ),
+            DeleteTarget::Account { name, .. } => (
+                "⚠ 删除确认".to_string(),
+                format!("确定删除账户「{}」？此操作不可恢复。", name),
+            ),
+        },
+        None => return div().into_any_element(),
     };
 
-    egui::Window::new("\u{26a0} 删除确认")
-        .id(egui::Id::new("modal_confirm_delete"))
-        .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
-        .resizable(false)
-        .collapsible(false)
-        .min_width(380.0)
-        .frame(
-            egui::Frame::new()
-                .fill(theme::CARD_BG)
-                .stroke(Stroke::new(1.0, theme::BORDER_ACCENT))
-                .corner_radius(10.0)
-                .inner_margin(egui::Margin::same(20)),
+    let is_danger = matches!(modal, Some(ModalKind::ConfirmDelete(_)));
+    let state_close = state.clone();
+    let state_confirm = state;
+
+    div()
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+        .bg(theme::overlay())
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(
+            div()
+                .w(px(420.0))
+                .bg(theme::bg_bar())
+                .border_1()
+                .border_color(theme::border_accent())
+                .rounded(px(10.0))
+                .p(px(16.0))
+                .flex()
+                .flex_col()
+                .gap(px(12.0))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(
+                            div()
+                                .text_color(theme::text_primary())
+                                .text_size(px(13.0))
+                                .child(title),
+                        )
+                        .child(
+                            div()
+                                .id("modal-x")
+                                .text_color(theme::text_weakest())
+                                .text_size(px(13.0))
+                                .cursor_pointer()
+                                .hover(|this| this.text_color(theme::error_red()))
+                                .child("✕")
+                                .on_click({
+                                    let s = state_close.clone();
+                                    move |_, _w, cx| {
+                                        s.update(cx, |st, cx| {
+                                            st.active_modal = None;
+                                            cx.notify();
+                                        });
+                                    }
+                                }),
+                        ),
+                )
+                .child(
+                    div()
+                        .text_color(theme::text_secondary())
+                        .text_size(px(11.0))
+                        .child(body_text),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .justify_end()
+                        .gap(px(8.0))
+                        .mt(px(8.0))
+                        .child(
+                            div()
+                                .id("modal-cancel")
+                                .px(px(12.0))
+                                .py(px(4.0))
+                                .bg(theme::bg_card())
+                                .border_1()
+                                .border_color(theme::border_normal())
+                                .rounded(px(5.0))
+                                .text_color(theme::text_muted())
+                                .text_size(px(11.0))
+                                .cursor_pointer()
+                                .hover(|this| this.opacity(0.85))
+                                .child("取消")
+                                .on_click({
+                                    let s = state_close;
+                                    move |_, _w, cx| {
+                                        s.update(cx, |st, cx| {
+                                            st.active_modal = None;
+                                            cx.notify();
+                                        });
+                                    }
+                                }),
+                        )
+                        .child(
+                            div()
+                                .id("modal-confirm")
+                                .px(px(12.0))
+                                .py(px(4.0))
+                                .bg(if is_danger {
+                                    theme::btn_danger_bg()
+                                } else {
+                                    theme::btn_primary_bg()
+                                })
+                                .border_1()
+                                .border_color(if is_danger {
+                                    theme::btn_danger_border()
+                                } else {
+                                    theme::btn_primary_border()
+                                })
+                                .rounded(px(5.0))
+                                .text_color(if is_danger {
+                                    theme::error_red()
+                                } else {
+                                    theme::accent_blue()
+                                })
+                                .text_size(px(11.0))
+                                .cursor_pointer()
+                                .hover(|this| this.opacity(0.85))
+                                .child(if is_danger { "确认删除" } else { "保存" })
+                                .on_click(move |_, _w, cx| {
+                                    state_confirm.update(cx, |st, cx| {
+                                        st.active_modal = None;
+                                        cx.notify();
+                                    });
+                                }),
+                        ),
+                ),
         )
-        .show(ctx, |ui| {
-            ui.set_min_width(360.0);
-
-            ui.label(
-                RichText::new(&description)
-                    .size(14.0)
-                    .color(theme::TEXT_PRIMARY),
-            );
-
-            ui.add_space(20.0);
-
-            ui.horizontal(|ui| {
-                let cancel_btn = egui::Button::new(
-                    RichText::new("取消").size(13.0).color(theme::TEXT_MUTED),
-                )
-                .fill(Color32::TRANSPARENT)
-                .stroke(Stroke::new(1.0, theme::BORDER_NORMAL));
-                if ui.add(cancel_btn).clicked() {
-                    state.active_modal = None;
-                }
-
-                ui.add_space(12.0);
-
-                let delete_btn = egui::Button::new(
-                    RichText::new("确认删除").size(13.0).color(theme::ERROR_RED),
-                )
-                .fill(theme::BTN_DANGER_BG)
-                .stroke(Stroke::new(1.0, theme::BTN_DANGER_BORDER));
-                if ui.add(delete_btn).clicked() {
-                    // 执行删除
-                    if let Some(ref storage) = state.storage {
-                        let result = match &target {
-                            DeleteTarget::Site { id, .. } => storage.delete_site(*id),
-                            DeleteTarget::Account { id, .. } => storage.delete_account(*id),
-                        };
-
-                        match result {
-                            Ok(()) => {
-                                let target_desc = match &target {
-                                    DeleteTarget::Site { name, .. } => {
-                                        format!("站点 \"{}\"", name)
-                                    }
-                                    DeleteTarget::Account { name, .. } => {
-                                        format!("账户 \"{}\"", name)
-                                    }
-                                };
-                                state.log_entries.push(LogEntry {
-                                    timestamp: chrono::Local::now()
-                                        .format("%H:%M:%S")
-                                        .to_string(),
-                                    level: LogLevel::Success,
-                                    message: format!("{} 删除成功", target_desc),
-                                });
-                            }
-                            Err(e) => {
-                                state.log_entries.push(LogEntry {
-                                    timestamp: chrono::Local::now()
-                                        .format("%H:%M:%S")
-                                        .to_string(),
-                                    level: LogLevel::Error,
-                                    message: format!("删除失败: {}", e),
-                                });
-                            }
-                        }
-                    }
-
-                    // 刷新站点列表
-                    state.reload_sites();
-                    state.active_modal = None;
-                }
-            });
-        });
+        .into_any_element()
 }
