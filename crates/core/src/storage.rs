@@ -314,6 +314,36 @@ impl Storage {
         Ok(accounts)
     }
 
+    pub fn get_account(&self, id: i64) -> Result<Option<Account>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, site_id, name, api_user, username_enc, password_enc, cookies_enc,
+                    cookie_issued_at, cookie_expires_at, created_at, updated_at
+             FROM accounts WHERE id = ?1",
+        )?;
+        let mut rows = stmt.query_map(params![id], |row| {
+            Ok(Account {
+                id: row.get(0)?,
+                site_id: row.get(1)?,
+                name: row.get(2)?,
+                api_user: row.get(3)?,
+                username: row.get::<_, Option<Vec<u8>>>(4)?
+                    .map(|b| String::from_utf8_lossy(&b).into_owned()),
+                password: row.get::<_, Option<Vec<u8>>>(5)?
+                    .map(|b| String::from_utf8_lossy(&b).into_owned()),
+                cookies: row.get::<_, Option<Vec<u8>>>(6)?
+                    .map(|b| String::from_utf8_lossy(&b).into_owned()),
+                cookie_issued_at: row.get(7)?,
+                cookie_expires_at: row.get(8)?,
+                created_at: row.get(9)?,
+                updated_at: row.get(10)?,
+            })
+        })?;
+        match rows.next() {
+            Some(row) => Ok(Some(row?)),
+            None => Ok(None),
+        }
+    }
+
     pub fn insert_account(&self, input: &AccountInput) -> Result<i64> {
         let now = Utc::now().to_rfc3339();
         let username_enc = input.username.as_ref().map(|s| s.as_bytes().to_vec());
