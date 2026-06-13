@@ -179,9 +179,15 @@ async def fetch_in_page(page: Page, url: str, method: str, headers: dict[str, st
                 cache: 'no-store',
             };
             if (body !== null) init.body = body;
+            // echo 出 init.headers，确认浏览器没剥离自定义 header
+            const sent_headers = {};
+            try {
+                const h = new Headers(headers);
+                h.forEach((v, k) => { sent_headers[k] = v; });
+            } catch (e) {}
             const resp = await fetch(url, init);
             const text = await resp.text();
-            return { ok: true, status: resp.status, body: text };
+            return { ok: true, status: resp.status, body: text, sent_headers };
         } catch (err) {
             return { ok: false, error: String(err) };
         }
@@ -191,12 +197,16 @@ async def fetch_in_page(page: Page, url: str, method: str, headers: dict[str, st
 
 
 def build_api_headers(account: AccountInput) -> dict[str, str]:
+    # 防御 api_user_key 为空的情况（用户编辑站点时可能误清空）
+    api_user_key = account.api_user_key.strip() if account.api_user_key else ""
+    if not api_user_key:
+        api_user_key = "new-api-user"
     headers = {
         "Accept": "application/json, text/plain, */*",
         "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
         "Content-Type": "application/json",
         "X-Requested-With": "XMLHttpRequest",
-        account.api_user_key: account.api_user,
+        api_user_key: account.api_user,
     }
     return headers
 
@@ -205,7 +215,10 @@ async def call_user_info(page: Page, account: AccountInput) -> tuple[bool, dict 
     url = f"{account.domain}{account.user_info_path}"
     headers = build_api_headers(account)
     log(f"[{account.name}] GET {url}")
+    log(f"[{account.name}]   headers keys={list(headers.keys())}, api_user_key='{account.api_user_key}', api_user='{account.api_user}'")
     resp = await fetch_in_page(page, url, "GET", headers, None)
+    if isinstance(resp, dict) and resp.get("sent_headers") is not None:
+        log(f"[{account.name}]   sent_headers={resp.get('sent_headers')}")
     if not resp.get("ok"):
         return False, None, None, f"fetch failed: {resp.get('error')}"
     if resp.get("status") != 200:
