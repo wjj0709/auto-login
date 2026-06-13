@@ -4,8 +4,9 @@ use gpui::{App, WeakEntity};
 
 use crate::app_state::{AppState, CheckInStatus, LogLevel};
 use crate::config::{AccountConfig, ProviderConfig};
-use crate::playwright::{self, PlaywrightResult};
-use crate::storage::{account_to_legacy_config, site_to_provider_config, Site};
+use crate::cookie;
+use crate::playwright::{self, CookieEntry, PlaywrightResult};
+use crate::storage::{account_to_legacy_config, site_to_provider_config, AccountInput, Site};
 
 /// 签到范围:全部 / 单站点 / 单账户。
 #[derive(Debug, Clone, Copy)]
@@ -125,6 +126,7 @@ pub fn run_checkin(app_state: WeakEntity<AppState>, scope: CheckinScope, cx: &mu
                     if let Some(r) = result_map.remove(&id) {
                         let success = r.success;
                         let err = r.error.clone();
+                        let cookies = r.cookies.clone();
                         let _ = app_state.update(cx, |state, cx| {
                             let name = state
                                 .account_by_id(id)
@@ -137,6 +139,8 @@ pub fn run_checkin(app_state: WeakEntity<AppState>, scope: CheckinScope, cx: &mu
                                 state.add_log(LogLevel::Error, &name, &format!("签到失败: {}", e));
                             }
                             state.process_result(id, r);
+                            // 顺带续期:回传 cookie 的 session 变化时落库
+                            persist_cookies_into_state(state, id, &cookies, false);
                             cx.notify();
                         });
                     } else {
@@ -177,4 +181,157 @@ pub fn run_checkin(app_state: WeakEntity<AppState>, scope: CheckinScope, cx: &mu
         });
     })
     .detach();
+}
+
+/// 账密登录获取 / 刷新单个账户的 Cookie(详情页「账密登录刷新」)。
+pub fn run_login(app_state: WeakEntity<AppState>, account_id: i64, cx: &mut App) {
+    let _ = app_state.update(cx, |state, cx| {
+        state.set_status(account_id, CheckInStatus::Running);
+        let name = state.account_by_id(account_id).map(|a| a.name.clone()).unwrap_or_default();
+        state.add_log(LogLevel::Info, &name, "账密登录中...");
+        cx.notify();
+    });
+
+    cx.spawn(async move |cx| {
+        let prepared = app_state.read_with(cx, |state, _cx| {
+            let acc = state.account_by_id(account_id)?;
+            if acc.username.is_none() || acc.password.is_none() {
+                return None;
+            }
+            let site = state.site_by_id(acc.site_id)?;
+            let mut cfg = account_to_legacy_config(acc, &site.name);
+            cfg.name = Some(account_id.to_string());
+            let mut providers: HashMap<String, ProviderConfig> = HashMap::new();
+            providers.insert(site.name.clone(), site_to_provider_config(site));
+            Some((cfg, providers))
+        });
+
+        let Ok(Some((cfg, providers))) = prepared else {
+            let _ = app_state.update(cx, |state, cx| {
+                state.set_status(account_id, CheckInStatus::Failed("缺少账号密码".into()));
+                let name = state.account_by_id(account_id).map(|a| a.name.clone()).unwrap_or_default();
+                state.add_log(LogLevel::Error, &name, "账密登录需要先填写用户名和密码");
+                cx.notify();
+            });
+            return;
+        };
+
+        let result = playwright::run_login(&[cfg], &providers).await;
+
+        let _ = app_state.update(cx, |state, cx| {
+            let name = state.account_by_id(account_id).map(|a| a.name.clone()).unwrap_or_default();
+            match result {
+                Ok(mut results) => match results.pop() {
+                    Some(r) if r.success => {
+                        let cookies = r.cookies.clone();
+                        state.set_status(account_id, CheckInStatus::Success);
+                        persist_cookies_into_state(state, account_id, &cookies, true);
+                        state.add_log(LogLevel::Success, &name, "账密登录成功,已更新 Cookie");
+                    }
+                    Some(r) => {
+                        let e = r.error.unwrap_or_else(|| "登录失败".into());
+                        state.set_status(account_id, CheckInStatus::Failed(e.clone()));
+                        state.add_log(LogLevel::Error, &name, &format!("账密登录失败: {}", e));
+                    }
+                    None => {
+                        state.set_status(account_id, CheckInStatus::Failed("无结果".into()));
+                        state.add_log(LogLevel::Error, &name, "登录器未返回结果");
+                    }
+                },
+                Err(e) => {
+                    state.set_status(account_id, CheckInStatus::Failed(e.clone()));
+                    state.add_log(LogLevel::Error, &name, &format!("登录器运行失败: {}", e));
+                }
+            }
+            cx.notify();
+        });
+    })
+    .detach();
+}
+
+/// 回传 cookie 数组 → 结构化 JSON 数组(保留真实 expires,供存档)。
+fn build_cookie_entries(cookies: &[CookieEntry]) -> Vec<serde_json::Value> {
+    cookies
+        .iter()
+        .map(|c| {
+            serde_json::json!({
+                "name": c.name, "value": c.value,
+                "domain": c.domain, "path": c.path,
+                "expires": c.expires, "httpOnly": c.http_only, "secure": c.secure,
+            })
+        })
+        .collect()
+}
+
+fn session_value(cookies: &[CookieEntry]) -> Option<String> {
+    cookies.iter().find(|c| c.name == "session").map(|c| c.value.clone())
+}
+
+fn session_expires_at(cookies: &[CookieEntry]) -> Option<String> {
+    cookies
+        .iter()
+        .find(|c| c.name == "session")
+        .and_then(|c| cookie::expires_to_iso(c.expires))
+}
+
+/// 把回传 cookie 落库并更新内存中的账户。
+///
+/// `force=false`(签到顺带续期):仅当 session 值变化时更新,避免 WAF cookie 抖动反复改写签发时间;
+/// `force=true`(账密登录):只要回传含 session 即更新。
+fn persist_cookies_into_state(
+    state: &mut AppState,
+    account_id: i64,
+    cookies: &[CookieEntry],
+    force: bool,
+) {
+    let new_session = match session_value(cookies) {
+        Some(v) => v,
+        None => return, // 无 session,不动现有 cookie
+    };
+
+    let Some(acc) = state.account_by_id(account_id) else {
+        return;
+    };
+    if !force {
+        let old_map = acc
+            .cookies_json
+            .as_deref()
+            .map(crate::storage::cookie_entries_to_map)
+            .unwrap_or_default();
+        let old_session = old_map.get("session").and_then(|v| v.as_str());
+        if old_session == Some(new_session.as_str()) {
+            return; // session 未变化,跳过
+        }
+    }
+
+    let entries = build_cookie_entries(cookies);
+    let cookies_json = serde_json::to_string(&entries).ok();
+    let expires_at = session_expires_at(cookies);
+    let issued_at = crate::storage::now_iso();
+    let input = AccountInput {
+        site_id: acc.site_id,
+        name: acc.name.clone(),
+        api_user: acc.api_user.clone(),
+        username: acc.username.clone(),
+        password: acc.password.clone(),
+        cookies_json: cookies_json.clone(),
+        cookie_issued_at: Some(issued_at.clone()),
+        cookie_expires_at: expires_at.clone(),
+    };
+
+    let write_ok = state
+        .db
+        .lock()
+        .ok()
+        .map(|guard| guard.update_account(account_id, &input).is_ok())
+        .unwrap_or(false);
+
+    if let Some(a) = state.accounts.iter_mut().find(|a| a.id == account_id) {
+        a.cookies_json = cookies_json;
+        a.cookie_issued_at = Some(issued_at);
+        a.cookie_expires_at = expires_at;
+    }
+    if !write_ok {
+        state.add_log(LogLevel::Warn, "System", "Cookie 续期写库失败");
+    }
 }

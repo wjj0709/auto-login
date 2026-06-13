@@ -4,12 +4,14 @@
 //! 概览页直接展示账户已有的 Cookie/余额信息;其余三个标签的数据来自 `account_cache`,
 //! 在 Phase 4 接入「刷新数据」后填充,此前显示「尚未拉取」。
 
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::notification::Notification;
-use gpui_component::WindowExt;
+use gpui_component::{Sizable, WindowExt};
 
 use crate::app_state::{AppState, AppView, BalanceInfo};
+use crate::cookie::{self, CookieStatus};
 use crate::service::{self, CheckinScope};
 use crate::storage::Account;
 use crate::theme::{Glass, GlassExt};
@@ -42,6 +44,10 @@ impl AccountDetail {
 
     fn trigger_checkin(&self, id: i64, cx: &mut Context<Self>) {
         service::run_checkin(self.app_state.downgrade(), CheckinScope::Account(id), cx);
+    }
+
+    fn trigger_login(&self, id: i64, cx: &mut Context<Self>) {
+        service::run_login(self.app_state.downgrade(), id, cx);
     }
 
     fn render_breadcrumb(&self, account_name: &str, site_name: &str, cx: &mut Context<Self>) -> impl IntoElement {
@@ -102,7 +108,12 @@ impl AccountDetail {
     }
 
     /// 概览:余额卡片 + Cookie 卡片
-    fn render_overview(account: &Account, balance: Option<&BalanceInfo>) -> AnyElement {
+    fn render_overview(
+        &self,
+        account: &Account,
+        balance: Option<&BalanceInfo>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let balance_card = match balance {
             Some(b) => div()
                 .flex()
@@ -122,11 +133,18 @@ impl AccountDetail {
                 .into_any_element(),
         };
 
-        let cookie_status = if account.cookies_json.is_some() {
-            ("有效 Cookie", Glass::success())
-        } else {
+        let (status_text, status_color): (&str, Hsla) = if account.cookies_json.is_none() {
             ("无 Cookie,待登录", Glass::warning())
+        } else {
+            match cookie::classify(account.cookie_expires_at.as_deref()) {
+                CookieStatus::Valid => ("有效", Glass::success()),
+                CookieStatus::ExpiringSoon => ("24 小时内到期", Glass::warning()),
+                CookieStatus::Expired => ("已过期", Glass::danger()),
+                CookieStatus::Unknown => ("会话期 / 未知", Glass::text_muted()),
+            }
         };
+        let has_creds = account.username.is_some() && account.password.is_some();
+        let account_id = account.id;
 
         div()
             .flex()
@@ -159,15 +177,32 @@ impl AccountDetail {
                             .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(Glass::text()).child("Cookie"))
                             .child(
                                 div()
-                                    .px_2()
-                                    .py_0p5()
-                                    .rounded(px(6.0))
-                                    .bg(cookie_status.1.opacity(0.12))
-                                    .border_1()
-                                    .border_color(cookie_status.1.opacity(0.35))
-                                    .text_xs()
-                                    .text_color(cookie_status.1)
-                                    .child(cookie_status.0),
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .px_2()
+                                            .py_0p5()
+                                            .rounded(px(6.0))
+                                            .bg(status_color.opacity(0.12))
+                                            .border_1()
+                                            .border_color(status_color.opacity(0.35))
+                                            .text_xs()
+                                            .text_color(status_color)
+                                            .child(status_text),
+                                    )
+                                    .when(has_creds, |this| {
+                                        this.child(
+                                            Button::new("cookie-relogin")
+                                                .ghost()
+                                                .small()
+                                                .label("账密登录刷新")
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    this.trigger_login(account_id, cx)
+                                                })),
+                                        )
+                                    }),
                             ),
                     )
                     .child(
@@ -254,7 +289,7 @@ impl Render for AccountDetail {
         let selected = self.selected_tab;
 
         let tab_content = match selected {
-            0 => Self::render_overview(&account, balance.as_ref()),
+            0 => self.render_overview(&account, balance.as_ref(), cx),
             1 => Self::render_pending("尚未拉取 API 密钥"),
             2 => Self::render_pending("尚未拉取使用日志"),
             _ => Self::render_pending("尚未拉取消耗图表"),

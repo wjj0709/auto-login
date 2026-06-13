@@ -69,6 +69,7 @@ class AccountResult:
     error: str | None = None
     used_login: bool = False
     raw_sign_in: dict | None = field(default=None)
+    cookies: list = field(default_factory=list)
 
 
 def parse_cookies(raw: Any) -> dict[str, str]:
@@ -268,12 +269,46 @@ async def perform_login(page: Page, account: AccountInput) -> tuple[bool, str | 
     return True, None
 
 
-async def process_account(context: BrowserContext, account: AccountInput, timeout_ms: int) -> AccountResult:
+async def collect_cookies(context: BrowserContext, host: str) -> list[dict]:
+    """取站点域名下的全部 cookie,转成 Rust 侧约定的结构(含 expires)。"""
+    try:
+        all_cookies = await context.cookies()
+    except Exception:
+        return []
+    out: list[dict] = []
+    for c in all_cookies:
+        dom = str(c.get("domain", "")).lstrip(".")
+        if host and dom and host not in dom and dom not in host:
+            continue
+        out.append({
+            "name": c.get("name", ""),
+            "value": c.get("value", ""),
+            "domain": c.get("domain", ""),
+            "path": c.get("path", "/"),
+            "expires": c.get("expires", -1),
+            "httpOnly": bool(c.get("httpOnly", False)),
+            "secure": bool(c.get("secure", False)),
+        })
+    return out
+
+
+async def process_account(
+    context: BrowserContext,
+    account: AccountInput,
+    timeout_ms: int,
+    action: str = "checkin",
+) -> AccountResult:
     result = AccountResult(name=account.name)
     page: Page | None = None
     try:
         from urllib.parse import urlparse
         host = urlparse(account.domain).hostname or ""
+
+        # 每个账户独立 cookie 环境,避免共享 context 时串号
+        try:
+            await context.clear_cookies()
+        except Exception:
+            pass
 
         cookies = parse_cookies(account.cookies)
         if cookies:
@@ -291,43 +326,61 @@ async def process_account(context: BrowserContext, account: AccountInput, timeou
         except Exception as e:
             log(f"[{account.name}] goto warning: {e}")
 
-        # 如果没有 session cookie 但提供了账密，则尝试登录
-        ctx_cookies = await context.cookies()
-        has_session = any(c["name"] == "session" for c in ctx_cookies)
-        if not has_session and account.username and account.password:
-            ok, err = await perform_login(page, account)
-            if ok:
-                result.used_login = True
+        if action == "login":
+            # 账密登录:强制走 perform_login,成功后取一次 user_info 作为校验
+            if not (account.username and account.password):
+                result.error = "缺少用户名或密码"
             else:
-                log(f"[{account.name}] login failed: {err}")
-
-        # 签到前余额
-        ok, before, before_user_info, err = await call_user_info(page, account)
-        if ok:
-            result.before = before
-            result.user_info = before_user_info
+                ok, err = await perform_login(page, account)
+                result.used_login = ok
+                result.success = ok
+                if ok:
+                    uok, _before, uinfo, _e = await call_user_info(page, account)
+                    if uok:
+                        result.user_info = uinfo
+                else:
+                    result.error = err or "登录失败"
         else:
-            log(f"[{account.name}] user_info(before) failed: {err}")
+            # checkin 流程:无 session 且有账密则先登录,再签到
+            ctx_cookies = await context.cookies()
+            has_session = any(c["name"] == "session" for c in ctx_cookies)
+            if not has_session and account.username and account.password:
+                ok, err = await perform_login(page, account)
+                if ok:
+                    result.used_login = True
+                else:
+                    log(f"[{account.name}] login failed: {err}")
 
-        # 签到（可选 manual）
-        sign_ok, raw_sign, sign_err = await call_sign_in(page, account)
-        result.raw_sign_in = raw_sign
+            # 签到前余额
+            ok, before, before_user_info, err = await call_user_info(page, account)
+            if ok:
+                result.before = before
+                result.user_info = before_user_info
+            else:
+                log(f"[{account.name}] user_info(before) failed: {err}")
 
-        # 签到后余额
-        ok2, after, after_user_info, err2 = await call_user_info(page, account)
-        if ok2:
-            result.after = after
-            result.user_info = after_user_info or result.user_info
+            # 签到（可选 manual）
+            sign_ok, raw_sign, sign_err = await call_sign_in(page, account)
+            result.raw_sign_in = raw_sign
 
-        if account.sign_in_path:
-            result.success = sign_ok
-            if not sign_ok:
-                result.error = sign_err or err2 or "sign-in failed"
-        else:
-            # auto check-in: 只要 after 拿到就算成功
-            result.success = ok2
-            if not ok2:
-                result.error = err2 or "auto check-in failed"
+            # 签到后余额
+            ok2, after, after_user_info, err2 = await call_user_info(page, account)
+            if ok2:
+                result.after = after
+                result.user_info = after_user_info or result.user_info
+
+            if account.sign_in_path:
+                result.success = sign_ok
+                if not sign_ok:
+                    result.error = sign_err or err2 or "sign-in failed"
+            else:
+                # auto check-in: 只要 after 拿到就算成功
+                result.success = ok2
+                if not ok2:
+                    result.error = err2 or "auto check-in failed"
+
+        # 回传任务结束时站点域名下的 cookie(用于落库与续期)
+        result.cookies = await collect_cookies(context, host)
     except Exception as e:
         result.error = f"exception: {e.__class__.__name__}: {e}"
         log(f"[{account.name}] exception: {traceback.format_exc()}")
@@ -341,12 +394,13 @@ async def process_account(context: BrowserContext, account: AccountInput, timeou
 
 
 async def run(payload: dict) -> dict:
+    action = str(payload.get("action", "checkin"))
     headless = bool(payload.get("headless", True))
     timeout_ms = int(payload.get("timeout_ms", 30000))
     raw_accounts = payload.get("accounts") or []
     accounts = [AccountInput(**a) for a in raw_accounts]
 
-    log(f"starting playwright headless={headless} accounts={len(accounts)}")
+    log(f"starting playwright action={action} headless={headless} accounts={len(accounts)}")
     results: list[AccountResult] = []
     async with async_playwright() as p:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -364,7 +418,7 @@ async def run(payload: dict) -> dict:
             try:
                 for acc in accounts:
                     log(f"--- processing {acc.name} ---")
-                    res = await process_account(context, acc, timeout_ms)
+                    res = await process_account(context, acc, timeout_ms, action)
                     results.append(res)
             finally:
                 await context.close()

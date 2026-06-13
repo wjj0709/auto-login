@@ -12,6 +12,7 @@ use gpui_component::notification::Notification;
 use gpui_component::{Sizable, WindowExt};
 
 use crate::app_state::{AppState, AppView, CheckInStatus};
+use crate::cookie::CookieStatus;
 use crate::service::{self, CheckinScope};
 use crate::storage::{
     cookies_value_to_entries, host_of, now_iso, AccountInput, Site, SiteInput,
@@ -237,7 +238,7 @@ pub fn open_account_list(
             for a in state.accounts_of_site(site_id) {
                 let s = state.status_of(a.id);
                 let (st_txt, st_col) = status_badge(&s);
-                let (ck_txt, ck_col) = cookie_badge(a.cookies_json.is_some());
+                let (ck_txt, ck_col) = cookie_badge(a.cookies_json.is_some(), a.cookie_expires_at.as_deref());
                 let balance = state
                     .balances
                     .get(&a.id)
@@ -624,12 +625,16 @@ pub fn confirm_delete_account(
     });
 }
 
-/// 账户行的 Cookie 状态短标(Phase 3 接入真实过期判定前的简化版)。
-fn cookie_badge(has_cookie: bool) -> (&'static str, Hsla) {
-    if has_cookie {
-        ("有 Cookie", Glass::success())
-    } else {
-        ("待登录", Glass::warning())
+/// 账户行的 Cookie 状态短标(依据过期时间分类)。
+fn cookie_badge(has_cookie: bool, expires_at: Option<&str>) -> (&'static str, Hsla) {
+    if !has_cookie {
+        return ("待登录", Glass::warning());
+    }
+    match crate::cookie::classify(expires_at) {
+        CookieStatus::Valid => ("有效", Glass::success()),
+        CookieStatus::ExpiringSoon => ("即将到期", Glass::warning()),
+        CookieStatus::Expired => ("已过期", Glass::danger()),
+        CookieStatus::Unknown => ("会话期", Glass::text_muted()),
     }
 }
 

@@ -5,6 +5,7 @@ mod assets;
 mod balance;
 mod checkin;
 mod config;
+mod cookie;
 mod crypto;
 mod home_view;
 mod log;

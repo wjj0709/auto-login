@@ -43,6 +43,35 @@ pub struct PlaywrightResult {
     #[serde(default)]
     #[allow(dead_code)]
     pub used_login: bool,
+    /// 任务结束时站点域名下的全部 cookie(Phase 3 起回传,用于落库与续期)
+    #[serde(default)]
+    pub cookies: Vec<CookieEntry>,
+}
+
+/// Playwright 回传的单条 cookie(对齐 `context.cookies()`)。
+#[derive(Debug, Deserialize, Clone)]
+pub struct CookieEntry {
+    pub name: String,
+    #[serde(default)]
+    pub value: String,
+    #[serde(default)]
+    pub domain: String,
+    #[serde(default = "default_cookie_path")]
+    pub path: String,
+    /// Unix 秒;-1 表示会话期 cookie
+    #[serde(default = "default_cookie_expires")]
+    pub expires: f64,
+    #[serde(default, rename = "httpOnly")]
+    pub http_only: bool,
+    #[serde(default)]
+    pub secure: bool,
+}
+
+fn default_cookie_path() -> String {
+    "/".to_string()
+}
+fn default_cookie_expires() -> f64 {
+    -1.0
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -123,8 +152,25 @@ fn headless_flag() -> bool {
     )
 }
 
-/// 调用 Playwright 子进程，对所有账号一次性完成签到流程
+/// 调用 Playwright 子进程执行签到(所有账号一次性完成)。
 pub async fn run_checkin(
+    accounts: &[AccountConfig],
+    providers: &std::collections::HashMap<String, ProviderConfig>,
+) -> Result<Vec<PlaywrightResult>, String> {
+    run_action("checkin", accounts, providers).await
+}
+
+/// 调用 Playwright 子进程执行账密登录(获取 / 刷新 Cookie)。
+pub async fn run_login(
+    accounts: &[AccountConfig],
+    providers: &std::collections::HashMap<String, ProviderConfig>,
+) -> Result<Vec<PlaywrightResult>, String> {
+    run_action("login", accounts, providers).await
+}
+
+/// 通用子进程调用。`action` 透传给 Python 决定任务类型(checkin / login / fetch_detail)。
+async fn run_action(
+    action: &str,
     accounts: &[AccountConfig],
     providers: &std::collections::HashMap<String, ProviderConfig>,
 ) -> Result<Vec<PlaywrightResult>, String> {
@@ -150,6 +196,7 @@ pub async fn run_checkin(
     }
 
     let payload = json!({
+        "action": action,
         "headless": headless_flag(),
         "timeout_ms": 30000,
         "accounts": payload_accounts,
