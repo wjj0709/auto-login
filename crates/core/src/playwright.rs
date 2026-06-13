@@ -86,7 +86,7 @@ pub struct QuotaInfo {
 }
 
 /// Cookie 信息
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct CookieInfo {
     pub name: String,
     pub value: String,
