@@ -182,6 +182,111 @@ impl RootView {
     }
 }
 
+/// 触发刷新单个账户的详情数据：spawn 后台线程执行 fetch_detail
+pub fn trigger_fetch_detail(state: Entity<AppState>, account_id: i64, cx: &mut gpui::App) {
+    state.update(cx, |st, cx| {
+        if st.bg_running.load(Ordering::Relaxed) {
+            return;
+        }
+        let now = chrono::Local::now().format("%H:%M:%S").to_string();
+
+        let (tx, rx) = mpsc::channel::<LogEntry>();
+        st.log_rx = Some(rx);
+        st.log_drawer_open = true;
+        st.running = true;
+        st.run_progress = Some(format!("拉取账户 #{} 详情…", account_id));
+        st.log_entries.push(LogEntry {
+            timestamp: now,
+            level: LogLevel::Info,
+            message: format!("开始刷新账户 #{} 详情", account_id),
+        });
+
+        let bg_running = Arc::new(AtomicBool::new(true));
+        st.bg_running = bg_running.clone();
+
+        let db_path = anyrouter_core::storage::Storage::default_path();
+        std::thread::spawn(move || {
+            run_fetch_detail_in_thread(db_path, account_id, tx, bg_running);
+        });
+
+        cx.notify();
+    });
+}
+
+fn run_fetch_detail_in_thread(
+    db_path: std::path::PathBuf,
+    account_id: i64,
+    tx: mpsc::Sender<LogEntry>,
+    bg_running: Arc<AtomicBool>,
+) {
+    let send = |level: LogLevel, msg: String| {
+        let _ = tx.send(LogEntry {
+            timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
+            level,
+            message: msg,
+        });
+    };
+
+    let storage = match anyrouter_core::storage::Storage::open(&db_path) {
+        Ok(s) => s,
+        Err(e) => {
+            send(LogLevel::Error, format!("打开数据库失败: {}", e));
+            bg_running.store(false, Ordering::Relaxed);
+            return;
+        }
+    };
+
+    let account = match storage.get_account(account_id) {
+        Ok(Some(a)) => a,
+        Ok(None) => {
+            send(LogLevel::Error, format!("账户 #{} 不存在", account_id));
+            bg_running.store(false, Ordering::Relaxed);
+            return;
+        }
+        Err(e) => {
+            send(LogLevel::Error, format!("读取账户失败: {}", e));
+            bg_running.store(false, Ordering::Relaxed);
+            return;
+        }
+    };
+
+    let site = match storage.get_site(account.site_id) {
+        Ok(Some(s)) => s,
+        _ => {
+            send(LogLevel::Error, format!("站点 #{} 不存在", account.site_id));
+            bg_running.store(false, Ordering::Relaxed);
+            return;
+        }
+    };
+
+    let rt = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            send(LogLevel::Error, format!("创建 runtime 失败: {}", e));
+            bg_running.store(false, Ordering::Relaxed);
+            return;
+        }
+    };
+
+    match rt.block_on(anyrouter_core::service::fetch_detail(
+        &storage, &site, &account, true,
+    )) {
+        Ok(_) => send(
+            LogLevel::Success,
+            format!("[{}] {} 详情已刷新", site.name, account.name),
+        ),
+        Err(e) => send(
+            LogLevel::Error,
+            format!("[{}] {} 刷新失败：{}", site.name, account.name, e),
+        ),
+    }
+
+    bg_running.store(false, Ordering::Relaxed);
+}
+
 /// GUI 入口（由 main.rs 调用）
 pub fn run_app(storage: anyrouter_core::storage::Storage) {
     let db_path = anyrouter_core::storage::Storage::default_path();

@@ -66,6 +66,7 @@ pub fn render(
 
     let state_back = state.clone();
     let state_for_tabs = state.clone();
+    let state_for_refresh = state.clone();
     let account_for_tab = account_opt.clone();
 
     div()
@@ -79,6 +80,8 @@ pub fn render(
         // 面包屑 + 操作按钮
         .child(render_header(
             state_back,
+            state_for_refresh,
+            account_id,
             account_display.clone(),
             site_name,
             last_updated,
@@ -98,6 +101,8 @@ pub fn render(
 
 fn render_header(
     state: Entity<AppState>,
+    state_refresh: Entity<AppState>,
+    account_id: i64,
     account_name: String,
     site_name: String,
     last_updated: Option<String>,
@@ -157,7 +162,14 @@ fn render_header(
                         .text_size(px(10.0))
                         .cursor_pointer()
                         .hover(|this| this.opacity(0.85))
-                        .child("↻ 刷新数据"),
+                        .child("↻ 刷新数据")
+                        .on_click(move |_, _w, cx| {
+                            crate::views::root::trigger_fetch_detail(
+                                state_refresh.clone(),
+                                account_id,
+                                cx,
+                            );
+                        }),
                 ),
         )
         .into_any_element()
