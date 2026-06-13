@@ -4,6 +4,7 @@ mod balance;
 mod checkin;
 mod config;
 mod crypto;
+mod home_view;
 mod log;
 mod log_panel;
 mod notify;

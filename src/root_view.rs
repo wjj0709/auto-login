@@ -7,21 +7,24 @@ use gpui_component::Disableable;
 use gpui_component::{Root, TitleBar};
 
 use crate::app_state::{AppState, AppView};
+use crate::home_view::HomeView;
 use crate::log_panel::LogPanel;
 use crate::service::{self, CheckinScope};
-use crate::theme::{Glass, GlassExt};
+use crate::theme::Glass;
 
 /// 根视图:自定义标题栏 + 整页视图(主页/详情)+ 底部栏 + 日志抽屉 + 弹窗层。
 pub struct RootView {
     app_state: Entity<AppState>,
+    home_view: Entity<HomeView>,
     log_panel: Entity<LogPanel>,
 }
 
 impl RootView {
     pub fn new(app_state: Entity<AppState>, _window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let home_view = cx.new(|_| HomeView::new(app_state.clone()));
         let log_panel = cx.new(|_| LogPanel::new(app_state.clone()));
         cx.observe(&app_state, |_, _, cx| cx.notify()).detach();
-        Self { app_state, log_panel }
+        Self { app_state, home_view, log_panel }
     }
 
     fn trigger_checkin_all(&mut self, cx: &mut Context<Self>) {
@@ -116,73 +119,6 @@ impl RootView {
             )
     }
 
-    /// 主页占位:统计概览(站点数 / 账户数 / 今日签到)。
-    /// 完整的站点卡片网格在 Milestone B 接入。
-    fn render_home(&self, cx: &mut Context<Self>) -> AnyElement {
-        let state = self.app_state.read(cx);
-        let site_count = state.sites.len();
-        let account_count = state.accounts.len();
-        let success = state.success_count;
-        let total = state.total_accounts();
-
-        let stat = |label: &str, value: String, color: Hsla| {
-            div()
-                .flex_1()
-                .flex()
-                .flex_col()
-                .gap_1()
-                .p_4()
-                .bg(Glass::card_gradient())
-                .border_1()
-                .border_color(Glass::border_bright())
-                .rounded(px(14.0))
-                .shadow(Glass::shadow_soft())
-                .child(div().text_xs().text_color(Glass::text_muted()).child(label.to_string()))
-                .child(
-                    div()
-                        .text_xl()
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(color)
-                        .child(value),
-                )
-        };
-
-        div()
-            .flex()
-            .flex_col()
-            .gap_5()
-            .child(
-                div()
-                    .flex()
-                    .gap_3()
-                    .child(stat("站点", site_count.to_string(), Glass::text()))
-                    .child(stat("账户", account_count.to_string(), Glass::text()))
-                    .child(stat(
-                        "今日签到",
-                        format!("{} / {}", success, total),
-                        Glass::primary(),
-                    )),
-            )
-            .child(
-                div()
-                    .glass_panel()
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .justify_center()
-                    .gap_2()
-                    .py_10()
-                    .child(div().text_xl().text_color(Glass::text_muted().opacity(0.5)).child("◫"))
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(Glass::text_muted())
-                            .child("站点卡片网格即将上线"),
-                    ),
-            )
-            .into_any_element()
-    }
-
     /// 底部栏:运行状态 + 计数 + 日志抽屉开关。
     fn render_bottom_bar(
         &self,
@@ -242,8 +178,11 @@ impl Render for RootView {
             )
         };
 
+        let toolbar = matches!(view, AppView::Home)
+            .then(|| self.render_toolbar(is_running, cx).into_any_element());
+
         let content = match view {
-            AppView::Home => self.render_home(cx),
+            AppView::Home => self.home_view.clone().into_any_element(),
             AppView::AccountDetail(_id) => div()
                 .p_6()
                 .text_color(Glass::text_muted())
@@ -257,7 +196,7 @@ impl Render for RootView {
             .size_full()
             .bg(hsla(0.0, 0.0, 0.04, 1.0))
             .child(Self::render_title_bar())
-            .child(self.render_toolbar(is_running, cx))
+            .children(toolbar)
             // 主内容滚动区
             .child(
                 div()

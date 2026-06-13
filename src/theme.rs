@@ -236,6 +236,7 @@ pub trait GlassExt: Styled + Sized {
     }
 
     /// 玻璃面板：更深的渐变 + 圆角 + 柔光投影
+    #[allow(dead_code)] // Milestone D 详情页与表单容器使用
     fn glass_panel(self) -> Self {
         self.bg(Glass::panel_gradient())
             .border_1()
