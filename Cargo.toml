@@ -22,6 +22,5 @@ gpui-component = "0.5.1"
 rusqlite = { version = "0.32", features = ["bundled"] }
 keyring = { version = "3", features = ["windows-native"] }
 aes-gcm = "0.10"
-rand = "0.8"
 base64 = "0.22"
 dirs = "5"

@@ -113,7 +113,6 @@ dependencies = [
  "gpui-component",
  "keyring",
  "lettre",
- "rand 0.8.6",
  "rusqlite",
  "serde",
  "serde_json",

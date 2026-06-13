@@ -37,8 +37,8 @@ impl Crypto {
                 .ok_or_else(|| anyhow!("系统凭据库中的主密钥格式异常"))?,
             Err(keyring::Error::NoEntry) => {
                 let mut key = [0u8; 32];
-                use rand::RngCore;
-                rand::rngs::OsRng.fill_bytes(&mut key);
+                use aes_gcm::aead::rand_core::RngCore;
+                OsRng.fill_bytes(&mut key);
                 entry
                     .set_password(&base64::engine::general_purpose::STANDARD.encode(key))
                     .context("无法写入系统凭据库")?;
