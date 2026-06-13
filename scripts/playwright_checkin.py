@@ -17,11 +17,18 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 import tempfile
 import traceback
 from dataclasses import dataclass, field
 from typing import Any
+
+# 确保 Windows 下 stdout/stderr 使用 UTF-8 编码
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+    os.environ.setdefault("PYTHONIOENCODING", "utf-8")
 
 try:
     from playwright.async_api import async_playwright, BrowserContext, Page
@@ -177,13 +184,14 @@ async def fetch_in_page(page: Page, url: str, method: str, headers: dict[str, st
 
 
 def build_api_headers(account: AccountInput) -> dict[str, str]:
-    return {
+    headers = {
         "Accept": "application/json, text/plain, */*",
         "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
         "Content-Type": "application/json",
         "X-Requested-With": "XMLHttpRequest",
         account.api_user_key: account.api_user,
     }
+    return headers
 
 
 async def call_user_info(page: Page, account: AccountInput) -> tuple[bool, dict | None, dict | None, str | None]:
@@ -243,7 +251,7 @@ async def call_sign_in(page: Page, account: AccountInput) -> tuple[bool, dict | 
 
 
 async def perform_login(page: Page, account: AccountInput) -> tuple[bool, str | None]:
-    """用账号密码 POST /api/user/login 取得 session cookie。"""
+    """用账号密码 POST /api/user/login 取得 session cookie。登录成功后自动更新 account.api_user。"""
     if not (account.username and account.password):
         return False, "missing username/password"
     url = f"{account.domain}/api/user/login?turnstile="
@@ -265,6 +273,13 @@ async def perform_login(page: Page, account: AccountInput) -> tuple[bool, str | 
         return False, f"login invalid JSON: {resp['body'][:200]}"
     if not data.get("success"):
         return False, f"login rejected: {data.get('message') or data}"
+    # 从登录响应中提取用户 ID，更新 api_user
+    login_data = data.get("data") or {}
+    if isinstance(login_data, dict):
+        user_id = login_data.get("id") or login_data.get("user_id") or login_data.get("userId")
+        if user_id:
+            account.api_user = str(user_id)
+            log(f"[{account.name}] updated api_user from login response: {account.api_user}")
     return True, None
 
 
@@ -290,6 +305,14 @@ async def process_account(context: BrowserContext, account: AccountInput, timeou
             await page.goto(nav_url, wait_until="domcontentloaded")
         except Exception as e:
             log(f"[{account.name}] goto warning: {e}")
+        # 等待页面完全加载（含 WAF JS challenge 完成）
+        try:
+            await page.wait_for_load_state("networkidle")
+        except Exception:
+            pass
+        # 额外等待 WAF JS 验证完成并设置 cookie
+        import time as _time
+        await asyncio.sleep(3)
 
         # 如果没有 session cookie 但提供了账密，则尝试登录
         ctx_cookies = await context.cookies()
@@ -355,10 +378,12 @@ async def run(payload: dict) -> dict:
                 headless=headless,
                 user_agent=CHROME_UA,
                 viewport={"width": 1280, "height": 800},
+                ignore_https_errors=True,
                 args=[
                     "--disable-blink-features=AutomationControlled",
                     "--disable-dev-shm-usage",
                     "--no-sandbox",
+                    "--ignore-certificate-errors",
                 ],
             )
             try:
@@ -387,7 +412,7 @@ def main() -> int:
         log(traceback.format_exc())
         print(json.dumps({"error": "runtime", "message": str(e)}))
         return 1
-    print(json.dumps(out, ensure_ascii=False))
+    print(json.dumps(out, ensure_ascii=True))
     return 0
 
 
