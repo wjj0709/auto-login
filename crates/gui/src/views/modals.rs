@@ -750,8 +750,9 @@ fn panel(
         .flex()
         .flex_col()
         .gap(px(12.0))
-        .on_click(|_, _w, _cx| {
-            // 阻止点击面板时关闭弹窗（事件不冒泡到 overlay）
+        .on_click(|_, _w, cx| {
+            // 阻止点击面板（含内部按钮）时事件冒泡到遮罩层导致弹窗被关闭
+            cx.stop_propagation();
         })
         .child(
             div()
