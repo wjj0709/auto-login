@@ -150,6 +150,12 @@ fn render_account_list(
                                         st.active_tab = 0;
                                         cx.notify();
                                     });
+                                    // 进入详情页后自动登录并拉取详情数据
+                                    crate::views::root::trigger_fetch_detail(
+                                        state_detail.clone(),
+                                        acc_id,
+                                        cx,
+                                    );
                                 }),
                         )
                         .child(
