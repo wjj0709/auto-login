@@ -4,6 +4,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use base64::Engine;
 use chrono::{Local, SecondsFormat};
 use rusqlite::{Connection, OptionalExtension};
 
@@ -114,6 +115,12 @@ pub fn now_iso() -> String {
 const SITE_COLS: &str = "id, name, domain, login_path, sign_in_path, user_info_path, \
                          tokens_path, logs_path, chart_path, api_user_key, created_at, updated_at";
 
+/// meta 表主密钥金丝雀的键名:开库时校验系统凭据库中的主密钥是否与建库时一致,
+/// 防止 keyring 密钥更换/丢失后静默生成新密钥、旧密文全部不可解。
+const META_KEY_CANARY: &str = "key_canary";
+/// 金丝雀明文;其密文以 base64 存于 meta,能解出此值即证明主密钥未变。
+const CANARY_PLAINTEXT: &str = "anyrouter-checkin-canary";
+
 impl Storage {
     /// 打开默认位置的数据库:%LOCALAPPDATA%/anyrouter-checkin/data.db
     #[allow(dead_code)] // Task 8 应用接线接入后使用(生产入口)
@@ -145,7 +152,8 @@ impl Storage {
         self.conn
             .execute_batch("PRAGMA foreign_keys = ON;")
             .context("无法启用外键约束")?;
-        self.migrate()
+        self.migrate()?;
+        self.verify_master_key()
     }
 
     /// 建表迁移;按 schema_version 递增,可重复执行。
@@ -214,6 +222,33 @@ impl Storage {
         Ok(())
     }
 
+    /// 主密钥金丝雀校验:首次建库时写入一段已知明文的密文,此后每次开库验证仍可解出;
+    /// 主密钥更换/丢失时开库即快速失败,避免与首次运行不可区分地静默用新密钥。
+    fn verify_master_key(&self) -> Result<()> {
+        use base64::engine::general_purpose::STANDARD;
+        match self.get_meta(META_KEY_CANARY)? {
+            None => {
+                // 首次建库:写入金丝雀密文
+                let blob = self.crypto.encrypt(CANARY_PLAINTEXT)?;
+                self.set_meta(META_KEY_CANARY, &STANDARD.encode(blob))
+            }
+            Some(b64) => {
+                // base64 格式异常同样按失配处理
+                let decrypted = STANDARD
+                    .decode(b64.trim())
+                    .ok()
+                    .and_then(|blob| self.crypto.decrypt(&blob).ok());
+                if decrypted.as_deref() != Some(CANARY_PLAINTEXT) {
+                    anyhow::bail!(
+                        "主密钥校验失败:系统凭据库中的主密钥与数据库不匹配(密钥可能已更换或丢失),\
+                         历史加密数据无法解密。如确认放弃旧数据,可删除数据目录中的 data.db 后重启。"
+                    );
+                }
+                Ok(())
+            }
+        }
+    }
+
     pub fn get_meta(&self, key: &str) -> Result<Option<String>> {
         let mut stmt = self
             .conn
@@ -226,7 +261,6 @@ impl Storage {
         })
     }
 
-    #[allow(dead_code)] // Task 7 写入 env_imported 等标记使用;迁移版本号已改为同事务 SQL 写入
     pub fn set_meta(&self, key: &str, value: &str) -> Result<()> {
         self.conn
             .execute(
@@ -362,17 +396,18 @@ impl Storage {
         Ok(self.conn.last_insert_rowid())
     }
 
+    /// 整行覆盖,含 site_id(跨站点移动账户);UNIQUE(site_id,name) 与外键约束天然兜底。
     #[allow(dead_code)] // Task 8 应用接线接入后使用
     pub fn update_account(&self, id: i64, input: &AccountInput) -> Result<()> {
         let n = self
             .conn
             .execute(
-                "UPDATE accounts SET name=?1, api_user=?2, username_enc=?3, password_enc=?4,
-                                 cookies_enc=?5, cookie_issued_at=?6, cookie_expires_at=?7,
-                                 updated_at=?8
-             WHERE id=?9",
+                "UPDATE accounts SET site_id=?1, name=?2, api_user=?3, username_enc=?4,
+                                 password_enc=?5, cookies_enc=?6, cookie_issued_at=?7,
+                                 cookie_expires_at=?8, updated_at=?9
+             WHERE id=?10",
                 rusqlite::params![
-                    input.name, input.api_user,
+                    input.site_id, input.name, input.api_user,
                     self.encrypt_opt(input.username.as_deref())?,
                     self.encrypt_opt(input.password.as_deref())?,
                     self.encrypt_opt(input.cookies_json.as_deref())?,
@@ -420,6 +455,7 @@ impl Storage {
     }
 
     /// 账户查询的唯一 SELECT 来源(列清单仅出现于此),行内同时完成敏感列解密。
+    /// suffix 仅限本模块内常量字符串,不得拼接外部输入。
     #[allow(dead_code)] // Task 8 应用接线接入后使用
     fn query_accounts(&self, suffix: &str, params: impl rusqlite::Params) -> Result<Vec<Account>> {
         let sql = format!(
@@ -431,14 +467,23 @@ impl Storage {
         let mut rows = stmt.query(params).context("查询账户失败")?;
         let mut out = Vec::new();
         while let Some(row) = rows.next().context("查询账户失败")? {
+            // 先取出定位字段,解密失败时错误信息能指明具体账户
+            let id: i64 = row.get(0)?;
+            let name: String = row.get(2)?;
             out.push(Account {
-                id: row.get(0)?,
+                id,
                 site_id: row.get(1)?,
-                name: row.get(2)?,
+                name: name.clone(),
                 api_user: row.get(3)?,
-                username: self.decrypt_opt(row.get::<_, Option<Vec<u8>>>(4)?)?,
-                password: self.decrypt_opt(row.get::<_, Option<Vec<u8>>>(5)?)?,
-                cookies_json: self.decrypt_opt(row.get::<_, Option<Vec<u8>>>(6)?)?,
+                username: self
+                    .decrypt_opt(row.get::<_, Option<Vec<u8>>>(4)?)
+                    .with_context(|| format!("账户 {name}(id={id}) 解密失败,主密钥可能已更换"))?,
+                password: self
+                    .decrypt_opt(row.get::<_, Option<Vec<u8>>>(5)?)
+                    .with_context(|| format!("账户 {name}(id={id}) 解密失败,主密钥可能已更换"))?,
+                cookies_json: self
+                    .decrypt_opt(row.get::<_, Option<Vec<u8>>>(6)?)
+                    .with_context(|| format!("账户 {name}(id={id}) 解密失败,主密钥可能已更换"))?,
                 cookie_issued_at: row.get(7)?,
                 cookie_expires_at: row.get(8)?,
                 created_at: row.get(9)?,
@@ -449,7 +494,7 @@ impl Storage {
     }
 
     /// 空串与 None 一律存 NULL,避免空值产生无意义密文。
-    #[allow(dead_code)] // Task 8 应用接线接入后使用
+    #[allow(dead_code)] // Task 7/8 接入后使用
     fn encrypt_opt(&self, value: Option<&str>) -> Result<Option<Vec<u8>>> {
         match value {
             Some(v) if !v.is_empty() => Ok(Some(self.crypto.encrypt(v)?)),
@@ -495,8 +540,8 @@ mod tests {
     fn migrate_creates_tables_and_version() {
         let s = test_storage();
         assert_eq!(s.get_meta("schema_version").unwrap().as_deref(), Some("1"));
-        // 四张表都应存在(查询不报错);业务表为空,meta 仅含 schema_version 一行
-        for (table, expected) in [("sites", 0), ("accounts", 0), ("account_cache", 0), ("meta", 1)]
+        // 四张表都应存在(查询不报错);业务表为空,meta 含 schema_version 与 key_canary 两行
+        for (table, expected) in [("sites", 0), ("accounts", 0), ("account_cache", 0), ("meta", 2)]
         {
             let n: i64 = s
                 .conn
@@ -699,5 +744,74 @@ mod tests {
         let site_id = s.insert_site(&SiteInput::with_defaults("A", "https://a.com")).unwrap();
         s.insert_account(&sample_account(site_id, "用户A")).unwrap();
         assert!(s.insert_account(&sample_account(site_id, "用户A")).is_err());
+    }
+
+    #[test]
+    fn update_account_can_move_between_sites() {
+        let s = test_storage();
+        let site_a = s.insert_site(&SiteInput::with_defaults("A", "https://a.com")).unwrap();
+        let site_b = s.insert_site(&SiteInput::with_defaults("B", "https://b.com")).unwrap();
+        let id = s.insert_account(&sample_account(site_a, "用户A")).unwrap();
+
+        // 整行覆盖语义:update 的 site_id 生效,账户从 A 移动到 B
+        s.update_account(id, &sample_account(site_b, "用户A")).unwrap();
+
+        assert!(s.list_accounts(site_a).unwrap().is_empty());
+        let accounts = s.list_accounts(site_b).unwrap();
+        assert_eq!(accounts.len(), 1);
+        assert_eq!(accounts[0].id, id);
+        assert_eq!(accounts[0].site_id, site_b);
+        assert_eq!(accounts[0].name, "用户A");
+        assert_eq!(accounts[0].username.as_deref(), Some("alice"));
+    }
+
+    #[test]
+    fn empty_string_credentials_stored_as_null() {
+        // encrypt_opt 将空串与 None 合并存 NULL 是有意语义,钉死防止后续层依赖相反假设
+        let s = test_storage();
+        let site_id = s.insert_site(&SiteInput::with_defaults("A", "https://a.com")).unwrap();
+        let mut input = sample_account(site_id, "用户A");
+        input.username = Some("".into());
+        input.password = Some("".into());
+        input.cookies_json = Some("".into());
+        let id = s.insert_account(&input).unwrap();
+
+        let acc = s.get_account(id).unwrap().unwrap();
+        assert_eq!(acc.username, None);
+        assert_eq!(acc.password, None);
+        assert_eq!(acc.cookies_json, None);
+        assert_eq!(s.raw_account_blobs(id), (None, None, None));
+    }
+
+    #[test]
+    fn corrupted_blob_fails_loud() {
+        let s = test_storage();
+        let site_id = s.insert_site(&SiteInput::with_defaults("A", "https://a.com")).unwrap();
+        let id = s.insert_account(&sample_account(site_id, "用户A")).unwrap();
+        s.conn
+            .execute("UPDATE accounts SET username_enc = ?1", rusqlite::params![vec![0u8; 40]])
+            .unwrap();
+        let err = s.get_account(id).unwrap_err();
+        assert!(
+            err.to_string().contains("解密失败,主密钥可能已更换"),
+            "错误信息应含账户定位文案:{err}"
+        );
+    }
+
+    #[test]
+    fn reopening_with_wrong_key_fails_fast() {
+        let path =
+            std::env::temp_dir().join(format!("anyrouter_canary_test_{}.db", std::process::id()));
+        if path.exists() {
+            std::fs::remove_file(&path).unwrap();
+        }
+        // key A 首次建库:写入金丝雀并正常关闭
+        drop(Storage::open_at(&path, Crypto::from_key(&[7u8; 32])).unwrap());
+        // key B 打开应快速失败,而非静默用新密钥(map 丢弃 Ok 值以满足 unwrap_err 的 Debug 约束)
+        let err = Storage::open_at(&path, Crypto::from_key(&[8u8; 32])).map(|_| ()).unwrap_err();
+        assert!(err.to_string().contains("主密钥校验失败"), "错误信息不符:{err}");
+        // key A 重新打开仍应成功(校验不得破坏数据)
+        drop(Storage::open_at(&path, Crypto::from_key(&[7u8; 32])).unwrap());
+        std::fs::remove_file(&path).unwrap();
     }
 }
