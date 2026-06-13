@@ -534,6 +534,7 @@ fn render_account_form(state: Entity<AppState>, cx: &mut Context<RootView>) -> A
         "新增账户".to_string()
     };
     let form_error = snap.form_error.clone();
+    let cred_method = form.cred_method;
 
     let name = form.name.clone();
     let api_user = form.api_user.clone();
@@ -541,21 +542,47 @@ fn render_account_form(state: Entity<AppState>, cx: &mut Context<RootView>) -> A
     let username = form.username.clone();
     let password = form.password.clone();
 
+    use crate::app_state::CredMethod;
+
     let mut body = div()
         .flex()
         .flex_col()
         .gap(px(8.0))
         .child(field_row("账户名称", true, name.clone()))
         .child(field_row("API 用户标识（new-api-user 值）", true, api_user.clone()))
+        // 凭据方式单选
         .child(
             div()
-                .text_size(px(10.0))
-                .text_color(theme::text_weakest())
-                .child("—— 凭据（两种方式至少填一种）——"),
-        )
-        .child(field_row("方式一：Cookie", false, cookie.clone()))
-        .child(field_row("方式二：登录用户名", false, username.clone()))
-        .child(field_row("方式二：登录密码", false, password.clone()));
+                .flex()
+                .items_center()
+                .gap(px(16.0))
+                .child(
+                    div()
+                        .text_size(px(10.0))
+                        .text_color(theme::text_muted())
+                        .child("凭据方式："),
+                )
+                .child(radio_option(
+                    "Cookie",
+                    cred_method == CredMethod::Cookie,
+                    state.clone(),
+                    CredMethod::Cookie,
+                ))
+                .child(radio_option(
+                    "账号密码",
+                    cred_method == CredMethod::Password,
+                    state.clone(),
+                    CredMethod::Password,
+                )),
+        );
+
+    // 根据所选方式展示对应输入框
+    body = match cred_method {
+        CredMethod::Cookie => body.child(field_row("Cookie（支持多行/自动换行）", true, cookie.clone())),
+        CredMethod::Password => body
+            .child(field_row("登录用户名", true, username.clone()))
+            .child(field_row("登录密码", true, password.clone())),
+    };
 
     if let Some(err) = form_error {
         body = body.child(
@@ -601,12 +628,32 @@ fn render_account_form(state: Entity<AppState>, cx: &mut Context<RootView>) -> A
                             cx.notify();
                             return;
                         }
-                        if cookie_v.is_empty() && (username_v.is_empty() || password_v.is_empty()) {
-                            st.form_error =
-                                Some("请至少填写 Cookie，或同时填写用户名和密码".into());
-                            cx.notify();
-                            return;
-                        }
+
+                        let method = st
+                            .account_form
+                            .as_ref()
+                            .map(|f| f.cred_method)
+                            .unwrap_or(crate::app_state::CredMethod::Cookie);
+
+                        // 按所选方式校验，并仅保存对应方式的数据
+                        let (final_cookie, final_username, final_password) = match method {
+                            crate::app_state::CredMethod::Cookie => {
+                                if cookie_v.is_empty() {
+                                    st.form_error = Some("请填写 Cookie".into());
+                                    cx.notify();
+                                    return;
+                                }
+                                (Some(cookie_v.clone()), None, None)
+                            }
+                            crate::app_state::CredMethod::Password => {
+                                if username_v.is_empty() || password_v.is_empty() {
+                                    st.form_error = Some("请同时填写用户名和密码".into());
+                                    cx.notify();
+                                    return;
+                                }
+                                (None, Some(username_v.clone()), Some(password_v.clone()))
+                            }
+                        };
 
                         let (site_id, editing_id) = st
                             .account_form
@@ -618,9 +665,9 @@ fn render_account_form(state: Entity<AppState>, cx: &mut Context<RootView>) -> A
                             site_id,
                             name: name_v.clone(),
                             api_user: api_user_v,
-                            username: if username_v.is_empty() { None } else { Some(username_v) },
-                            password: if password_v.is_empty() { None } else { Some(password_v) },
-                            cookies: if cookie_v.is_empty() { None } else { Some(cookie_v) },
+                            username: final_username,
+                            password: final_password,
+                            cookies: final_cookie,
                         };
 
                         let now = chrono::Local::now().format("%H:%M:%S").to_string();
@@ -684,6 +731,70 @@ fn field_row(label: &str, required: bool, input: Entity<crate::components::text_
                 .child(label_text),
         )
         .child(input)
+        .into_any_element()
+}
+
+/// 渲染一个凭据方式单选项（圆点 + 文字），点击切换 cred_method
+fn radio_option(
+    label: &str,
+    selected: bool,
+    state: Entity<AppState>,
+    method: crate::app_state::CredMethod,
+) -> AnyElement {
+    let id_str = match method {
+        crate::app_state::CredMethod::Cookie => "radio-cookie",
+        crate::app_state::CredMethod::Password => "radio-password",
+    };
+    div()
+        .id(id_str)
+        .flex()
+        .items_center()
+        .gap(px(5.0))
+        .cursor_pointer()
+        .child(
+            // 圆点指示器
+            div()
+                .w(px(12.0))
+                .h(px(12.0))
+                .rounded(px(6.0))
+                .border_1()
+                .border_color(if selected {
+                    theme::accent_blue()
+                } else {
+                    theme::border_accent()
+                })
+                .flex()
+                .items_center()
+                .justify_center()
+                .when(selected, |this| {
+                    this.child(
+                        div()
+                            .w(px(6.0))
+                            .h(px(6.0))
+                            .rounded(px(3.0))
+                            .bg(theme::accent_blue()),
+                    )
+                }),
+        )
+        .child(
+            div()
+                .text_size(px(11.0))
+                .text_color(if selected {
+                    theme::text_primary()
+                } else {
+                    theme::text_muted()
+                })
+                .child(label.to_string()),
+        )
+        .on_click(move |_, _w, cx| {
+            state.update(cx, |st, cx| {
+                if let Some(f) = st.account_form.as_mut() {
+                    f.cred_method = method;
+                }
+                st.form_error = None;
+                cx.notify();
+            });
+        })
         .into_any_element()
 }
 

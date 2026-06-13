@@ -14,7 +14,7 @@ use gpui::{
     Entity, EntityInputHandler, FocusHandle, Focusable, GlobalElementId, InspectorElementId,
     IntoElement, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad,
     Pixels, Point, ShapedLine, SharedString, Style, TextRun, UTF16Selection, UnderlineStyle,
-    Window, div, fill, point, prelude::*, px, relative, size,
+    Window, WrappedLine, div, fill, point, prelude::*, px, relative, size,
 };
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -44,11 +44,15 @@ pub struct TextInput {
     content: SharedString,
     placeholder: SharedString,
     masked: bool,
+    multiline: bool,
+    rows: usize,
     selected_range: Range<usize>,
     selection_reversed: bool,
     marked_range: Option<Range<usize>>,
     last_layout: Option<ShapedLine>,
+    last_wrapped: Option<WrappedLine>,
     last_bounds: Option<Bounds<Pixels>>,
+    last_line_height: Pixels,
     is_selecting: bool,
 }
 
@@ -66,13 +70,30 @@ impl TextInput {
             content,
             placeholder: placeholder.into(),
             masked,
+            multiline: false,
+            rows: 1,
             selected_range: len..len,
             selection_reversed: false,
             marked_range: None,
             last_layout: None,
+            last_wrapped: None,
             last_bounds: None,
+            last_line_height: px(16.0),
             is_selecting: false,
         }
+    }
+
+    /// 创建多行自动换行输入框（用于 Cookie 等长文本）
+    pub fn new_multiline(
+        cx: &mut Context<Self>,
+        placeholder: impl Into<SharedString>,
+        initial: impl Into<SharedString>,
+        rows: usize,
+    ) -> Self {
+        let mut input = Self::new(cx, placeholder, initial, false);
+        input.multiline = true;
+        input.rows = rows.max(2);
+        input
     }
 
     /// 读取当前文本内容
@@ -200,8 +221,26 @@ impl TextInput {
         if self.content.is_empty() {
             return 0;
         }
-        let (Some(bounds), Some(line)) = (self.last_bounds.as_ref(), self.last_layout.as_ref())
-        else {
+        let Some(bounds) = self.last_bounds.as_ref() else {
+            return 0;
+        };
+
+        // 多行：用 WrappedLine 的二维定位
+        if self.multiline {
+            let Some(wrapped) = self.last_wrapped.as_ref() else {
+                return 0;
+            };
+            let line_height = self.last_line_height;
+            let local = point(position.x - bounds.left(), position.y - bounds.top());
+            let display_idx = match wrapped.closest_index_for_position(local, line_height) {
+                Ok(idx) => idx,
+                Err(idx) => idx,
+            };
+            return self.display_offset_to_content(display_idx);
+        }
+
+        // 单行
+        let Some(line) = self.last_layout.as_ref() else {
             return 0;
         };
         if position.y < bounds.top() {
@@ -438,8 +477,10 @@ struct TextElement {
 
 struct PrepaintState {
     line: Option<ShapedLine>,
+    wrapped: Option<WrappedLine>,
     cursor: Option<PaintQuad>,
     selection: Option<PaintQuad>,
+    line_height: Pixels,
 }
 
 impl IntoElement for TextElement {
@@ -468,9 +509,11 @@ impl Element for TextElement {
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
+        let input = self.input.read(cx);
+        let rows = if input.multiline { input.rows } else { 1 };
         let mut style = Style::default();
         style.size.width = relative(1.).into();
-        style.size.height = window.line_height().into();
+        style.size.height = (window.line_height() * rows as f32).into();
         (window.request_layout(style, [], cx), ())
     }
 
@@ -484,9 +527,11 @@ impl Element for TextElement {
         cx: &mut App,
     ) -> Self::PrepaintState {
         let input = self.input.read(cx);
+        let multiline = input.multiline;
         let selected_range = input.selected_range.clone();
         let cursor = input.cursor_offset();
         let style = window.text_style();
+        let line_height = window.line_height();
 
         let content_empty = input.content.is_empty();
         let (display_text, text_color) = if content_empty {
@@ -499,12 +544,9 @@ impl Element for TextElement {
         let disp_cursor = input.content_offset_to_display(cursor);
         let disp_sel_start = input.content_offset_to_display(selected_range.start);
         let disp_sel_end = input.content_offset_to_display(selected_range.end);
-        let marked_display = input
-            .marked_range
-            .as_ref()
-            .map(|r| {
-                input.content_offset_to_display(r.start)..input.content_offset_to_display(r.end)
-            });
+        let marked_display = input.marked_range.as_ref().map(|r| {
+            input.content_offset_to_display(r.start)..input.content_offset_to_display(r.end)
+        });
 
         let run = TextRun {
             len: display_text.len(),
@@ -542,6 +584,42 @@ impl Element for TextElement {
         };
 
         let font_size = style.font_size.to_pixels(window.rem_size());
+
+        if multiline {
+            // 多行：按元素宽度自动换行
+            let wrapped_lines = window
+                .text_system()
+                .shape_text(display_text, font_size, &runs, Some(bounds.size.width), None)
+                .ok();
+            let wrapped = wrapped_lines.and_then(|mut v| if v.is_empty() { None } else { Some(v.remove(0)) });
+
+            let cursor = if selected_range.is_empty() {
+                wrapped
+                    .as_ref()
+                    .and_then(|w| w.position_for_index(disp_cursor, line_height))
+                    .map(|pos| {
+                        fill(
+                            Bounds::new(
+                                point(bounds.left() + pos.x, bounds.top() + pos.y),
+                                size(px(1.5), line_height),
+                            ),
+                            theme::accent_blue(),
+                        )
+                    })
+            } else {
+                None
+            };
+
+            return PrepaintState {
+                line: None,
+                wrapped,
+                cursor,
+                selection: None,
+                line_height,
+            };
+        }
+
+        // 单行
         let line = window
             .text_system()
             .shape_line(display_text, font_size, &runs, None);
@@ -572,8 +650,10 @@ impl Element for TextElement {
         };
         PrepaintState {
             line: Some(line),
+            wrapped: None,
             cursor,
             selection,
+            line_height,
         }
     }
 
@@ -596,16 +676,16 @@ impl Element for TextElement {
         if let Some(selection) = prepaint.selection.take() {
             window.paint_quad(selection)
         }
-        let line = prepaint.line.take().unwrap();
-        line.paint(
-            bounds.origin,
-            window.line_height(),
-            gpui::TextAlign::Left,
-            None,
-            window,
-            cx,
-        )
-        .unwrap();
+        let line_height = prepaint.line_height;
+        let wrapped = prepaint.wrapped.take();
+        let line = prepaint.line.take();
+
+        if let Some(wrapped) = wrapped.as_ref() {
+            let _ = wrapped.paint(bounds.origin, line_height, gpui::TextAlign::Left, None, window, cx);
+        } else if let Some(line) = line.as_ref() {
+            line.paint(bounds.origin, line_height, gpui::TextAlign::Left, None, window, cx)
+                .unwrap();
+        }
 
         if focus_handle.is_focused(window)
             && let Some(cursor) = prepaint.cursor.take()
@@ -614,8 +694,10 @@ impl Element for TextElement {
         }
 
         self.input.update(cx, |input, _cx| {
-            input.last_layout = Some(line);
+            input.last_layout = line;
+            input.last_wrapped = wrapped;
             input.last_bounds = Some(bounds);
+            input.last_line_height = line_height;
         });
     }
 }

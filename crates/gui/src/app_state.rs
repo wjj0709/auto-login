@@ -65,10 +65,20 @@ pub struct SiteFormFields {
     pub api_user_key: Entity<TextInput>,
 }
 
+/// 账户凭据录入方式
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CredMethod {
+    /// 直接粘贴 Cookie
+    Cookie,
+    /// 用户名 + 密码
+    Password,
+}
+
 /// 账户表单的输入框集合
 pub struct AccountFormFields {
     pub site_id: i64,
     pub editing_id: Option<i64>,
+    pub cred_method: CredMethod,
     pub name: Entity<TextInput>,
     pub api_user: Entity<TextInput>,
     pub cookie: Entity<TextInput>,
@@ -127,9 +137,10 @@ impl AccountFormFields {
         Self {
             site_id,
             editing_id: None,
+            cred_method: CredMethod::Cookie,
             name: cx.new(|cx| TextInput::new(cx, "如 主账号", "", false)),
             api_user: cx.new(|cx| TextInput::new(cx, "new-api-user 请求头值", "", false)),
-            cookie: cx.new(|cx| TextInput::new(cx, "session=...; 或 JSON", "", false)),
+            cookie: cx.new(|cx| TextInput::new_multiline(cx, "session=...; 或 JSON", "", 4)),
             username: cx.new(|cx| TextInput::new(cx, "可选：登录用户名", "", false)),
             password: cx.new(|cx| TextInput::new(cx, "可选：登录密码", "", true)),
         }
@@ -137,19 +148,28 @@ impl AccountFormFields {
 
     /// 编辑账户
     pub fn new_edit<C: AppContext>(cx: &mut C, account: &Account) -> Self {
+        // 根据已有数据推断默认凭据方式
+        let cred_method = if account.cookies.as_ref().map(|c| !c.is_empty()).unwrap_or(false) {
+            CredMethod::Cookie
+        } else if account.username.is_some() {
+            CredMethod::Password
+        } else {
+            CredMethod::Cookie
+        };
         Self {
             site_id: account.site_id,
             editing_id: Some(account.id),
+            cred_method,
             name: cx.new(|cx| TextInput::new(cx, "如 主账号", account.name.clone(), false)),
             api_user: cx.new(|cx| {
                 TextInput::new(cx, "new-api-user 请求头值", account.api_user.clone(), false)
             }),
             cookie: cx.new(|cx| {
-                TextInput::new(
+                TextInput::new_multiline(
                     cx,
                     "session=...; 或 JSON",
                     account.cookies.clone().unwrap_or_default(),
-                    false,
+                    4,
                 )
             }),
             username: cx.new(|cx| {
