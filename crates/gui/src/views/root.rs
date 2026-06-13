@@ -1,10 +1,15 @@
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
+use std::time::Duration;
+
 use gpui::{
     AnyElement, App, Bounds, Context, Entity, IntoElement, ParentElement, Render, Styled, Window,
     WindowBounds, WindowOptions, div, prelude::*, px, size,
 };
 use gpui_platform::application;
 
-use crate::app_state::AppState;
+use crate::app_state::{AppState, LogEntry, LogLevel};
 use crate::theme;
 use crate::views;
 
@@ -99,15 +104,7 @@ impl RootView {
                     .hover(|this| this.opacity(0.85))
                     .child("⚡ 一键签到全部")
                     .on_click(move |_, _window, cx| {
-                        state.update(cx, |state, cx| {
-                            state.log_entries.push(crate::app_state::LogEntry {
-                                timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
-                                level: crate::app_state::LogLevel::Info,
-                                message: "签到功能待接入后台执行".to_string(),
-                            });
-                            state.log_drawer_open = true;
-                            cx.notify();
-                        });
+                        trigger_checkin_all(state.clone(), cx);
                     }),
             )
             .into_any_element()
@@ -187,6 +184,7 @@ impl RootView {
 
 /// GUI 入口（由 main.rs 调用）
 pub fn run_app(storage: anyrouter_core::storage::Storage) {
+    let db_path = anyrouter_core::storage::Storage::default_path();
     application().run(move |cx: &mut App| {
         let state = cx.new(|_| AppState::from_storage(storage));
         let bounds = Bounds::centered(None, size(px(1100.0), px(750.0)), cx);
@@ -199,5 +197,198 @@ pub fn run_app(storage: anyrouter_core::storage::Storage) {
         )
         .unwrap();
         cx.activate(true);
+
+        // 启动后台日志轮询：每 200ms 把 channel 中的日志写入 state
+        spawn_log_poller(state, db_path, cx);
     });
+}
+
+fn spawn_log_poller(state: Entity<AppState>, _db_path: std::path::PathBuf, cx: &mut App) {
+    cx.spawn(async move |cx| {
+        loop {
+            cx.background_executor()
+                .timer(Duration::from_millis(200))
+                .await;
+            let had_entry = cx.update(|cx| {
+                state.update(cx, |st, _| {
+                    let mut had_entry = false;
+                    if let Some(ref rx) = st.log_rx {
+                        while let Ok(entry) = rx.try_recv() {
+                            st.log_entries.push(entry);
+                            had_entry = true;
+                        }
+                    }
+                    let bg_run = st.bg_running.load(Ordering::Relaxed);
+                    if !bg_run && st.running {
+                        st.running = false;
+                        st.run_progress = None;
+                        st.reload_sites();
+                        had_entry = true;
+                    }
+                    had_entry
+                })
+            });
+            if had_entry {
+                cx.update(|cx| state.update(cx, |_, cx| cx.notify()));
+            }
+        }
+    })
+    .detach();
+}
+
+/// 触发"一键签到全部"：spawn 后台线程执行所有站点的签到
+fn trigger_checkin_all(state: Entity<AppState>, cx: &mut App) {
+    state.update(cx, |st, cx| {
+        if st.running {
+            return;
+        }
+        if st.bg_running.load(Ordering::Relaxed) {
+            return;
+        }
+        let now = chrono::Local::now().format("%H:%M:%S").to_string();
+
+        // 创建 channel
+        let (tx, rx) = mpsc::channel::<LogEntry>();
+        st.log_rx = Some(rx);
+        st.log_drawer_open = true;
+        st.running = true;
+        st.run_progress = Some("签到准备中…".into());
+        st.log_entries.push(LogEntry {
+            timestamp: now.clone(),
+            level: LogLevel::Info,
+            message: "开始执行一键签到".to_string(),
+        });
+
+        let bg_running = Arc::new(AtomicBool::new(true));
+        st.bg_running = bg_running.clone();
+
+        let db_path = anyrouter_core::storage::Storage::default_path();
+        std::thread::spawn(move || {
+            run_checkin_in_thread(db_path, tx, bg_running);
+        });
+
+        cx.notify();
+    });
+}
+
+fn run_checkin_in_thread(
+    db_path: std::path::PathBuf,
+    tx: mpsc::Sender<LogEntry>,
+    bg_running: Arc<AtomicBool>,
+) {
+    let send = |level: LogLevel, msg: String| {
+        let _ = tx.send(LogEntry {
+            timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
+            level,
+            message: msg,
+        });
+    };
+
+    // 在子线程中重新打开 Storage（rusqlite Connection 是 !Send）
+    let storage = match anyrouter_core::storage::Storage::open(&db_path) {
+        Ok(s) => s,
+        Err(e) => {
+            send(LogLevel::Error, format!("打开数据库失败: {}", e));
+            bg_running.store(false, Ordering::Relaxed);
+            return;
+        }
+    };
+
+    let sites = match storage.list_sites() {
+        Ok(s) => s,
+        Err(e) => {
+            send(LogLevel::Error, format!("读取站点列表失败: {}", e));
+            bg_running.store(false, Ordering::Relaxed);
+            return;
+        }
+    };
+
+    if sites.is_empty() {
+        send(LogLevel::Warning, "未找到任何站点配置".into());
+        bg_running.store(false, Ordering::Relaxed);
+        return;
+    }
+
+    // 创建 tokio runtime 用于驱动 async service
+    let rt = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            send(LogLevel::Error, format!("创建 runtime 失败: {}", e));
+            bg_running.store(false, Ordering::Relaxed);
+            return;
+        }
+    };
+
+    let mut total_success = 0usize;
+    let mut total_fail = 0usize;
+
+    for site in &sites {
+        let accounts = match storage.list_accounts_by_site(site.id) {
+            Ok(a) => a,
+            Err(e) => {
+                send(
+                    LogLevel::Error,
+                    format!("[{}] 读取账户失败: {}", site.name, e),
+                );
+                continue;
+            }
+        };
+        if accounts.is_empty() {
+            send(
+                LogLevel::Info,
+                format!("[{}] 该站点暂无账户，跳过", site.name),
+            );
+            continue;
+        }
+        send(
+            LogLevel::Info,
+            format!("[{}] 开始签到 {} 个账户…", site.name, accounts.len()),
+        );
+
+        let result = rt.block_on(anyrouter_core::service::checkin_accounts(
+            &storage, site, &accounts, true,
+        ));
+
+        match result {
+            Ok(results) => {
+                for r in results {
+                    if r.success {
+                        total_success += 1;
+                        let after = r.balance_after.map(|b| format!(" 余额 ${:.2}", b)).unwrap_or_default();
+                        send(
+                            LogLevel::Success,
+                            format!("[{}] {} 签到成功{}", site.name, r.account_name, after),
+                        );
+                    } else {
+                        total_fail += 1;
+                        send(
+                            LogLevel::Error,
+                            format!(
+                                "[{}] {} 签到失败：{}",
+                                site.name,
+                                r.account_name,
+                                r.error.unwrap_or_else(|| "未知错误".into())
+                            ),
+                        );
+                    }
+                }
+            }
+            Err(e) => {
+                send(
+                    LogLevel::Error,
+                    format!("[{}] 调用 Playwright 失败: {}", site.name, e),
+                );
+                total_fail += accounts.len();
+            }
+        }
+    }
+
+    send(
+        LogLevel::Info,
+        format!("签到完成：成功 {} / 失败 {}", total_success, total_fail),
+    );
+    bg_running.store(false, Ordering::Relaxed);
 }
