@@ -132,7 +132,7 @@ CREATE TABLE meta (
 1. 插入内置站点 AnyRouter(anyrouter.top,手动签到)与 AgentRouter(agentrouter.org,自动签到),同名已存在则跳过;
 2. 解析 `PROVIDERS` 环境变量,逐项建站点(路径字段缺省用默认值);
 3. 解析 `ANYROUTER_ACCOUNTS`,按 `provider` 名挂到对应站点;cookies 内偷渡的 `_username`/`_password` 迁移到加密列;引用了不存在站点的账户跳过并记日志;
-4. 写 `meta.env_imported = 1`。JSON 解析失败:日志警告、跳过导入、以空库启动。
+4. 仅当 JSON 解析无错误时写 `meta.env_imported = 1`;解析失败则日志警告、跳过该来源、**不写标记**,修复 .env 后下次启动自动重试(站点按 name、账户按同站点同名幂等去重,重试安全)。注意:引用不存在站点等「跳过」(accounts_skipped)不参与门控,避免用户在 UI 删除的数据被每次启动反复复活。
 5. `dotenvy` 保留,仅用于运维变量(`PYTHON_BIN`、`PLAYWRIGHT_SCRIPT`、`PLAYWRIGHT_HEADLESS` 等)。
 
 ## 5. 抓取层协议(Rust ↔ Python)

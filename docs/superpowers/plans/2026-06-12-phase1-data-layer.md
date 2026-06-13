@@ -1096,6 +1096,8 @@ pub struct ImportReport {
     pub sites_added: usize,
     pub accounts_added: usize,
     pub accounts_skipped: usize,
+    /// JSON 解析失败的来源数(PROVIDERS / ANYROUTER_ACCOUNTS 各计 1);>0 时不写 env_imported
+    pub parse_errors: usize,
 }
 ```
 
@@ -1114,6 +1116,12 @@ pub struct ImportReport {
             "环境变量导入完成:新增站点 {},账户 {},跳过 {}",
             report.sites_added, report.accounts_added, report.accounts_skipped
         ));
+        // 解析有错时不写标记:修复 .env 后下次启动自动重试(幂等去重保证重试安全)。
+        // accounts_skipped(引用不存在站点等)不参与门控,避免用户删除的数据被反复复活。
+        if report.parse_errors > 0 {
+            log::warn("部分配置解析失败,未写入导入标记;修复 .env 后下次启动将自动重试");
+            return Ok(());
+        }
         self.set_meta("env_imported", "1")
     }
 
@@ -1154,7 +1162,10 @@ pub struct ImportReport {
                         report.sites_added += 1;
                     }
                 }
-                Err(e) => log::warn(&format!("PROVIDERS 解析失败,跳过导入: {}", e)),
+                Err(e) => {
+                    log::warn(&format!("PROVIDERS 解析失败,跳过导入: {}", e));
+                    report.parse_errors += 1;
+                }
             }
         }
 
@@ -1169,12 +1180,18 @@ pub struct ImportReport {
                             report.accounts_skipped += 1;
                             continue;
                         };
-                        if self
-                            .list_accounts(site.id)?
-                            .iter()
-                            .any(|a| a.name == name)
-                        {
-                            continue; // 幂等:同站点同名已存在
+                        // 幂等查重走 api_user 明文列,不触发解密:
+                        // 同名且同 api_user → 重试残留,静默跳过;
+                        // 同名不同 api_user → 真实命名碰撞,警告并计入跳过,避免静默丢数据。
+                        if let Some(existing) = self.find_account_api_user(site.id, &name)? {
+                            if existing != acc.api_user {
+                                log::warn(&format!(
+                                    "账户 {} 与既有账户同名但 api_user 不同,跳过导入",
+                                    name
+                                ));
+                                report.accounts_skipped += 1;
+                            }
+                            continue;
                         }
                         let (entries, username, password) =
                             cookies_value_to_entries(&acc.cookies, host_of(&site.domain));
@@ -1196,7 +1213,10 @@ pub struct ImportReport {
                         report.accounts_added += 1;
                     }
                 }
-                Err(e) => log::warn(&format!("ANYROUTER_ACCOUNTS 解析失败,跳过导入: {}", e)),
+                Err(e) => {
+                    log::warn(&format!("ANYROUTER_ACCOUNTS 解析失败,跳过导入: {}", e));
+                    report.parse_errors += 1;
+                }
             }
         }
 
