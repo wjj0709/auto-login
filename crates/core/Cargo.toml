@@ -12,3 +12,7 @@ chrono = { workspace = true }
 anyhow = { workspace = true }
 rusqlite = { version = "0.31", features = ["bundled"] }
 dirs = "5"
+keyring = "3"
+aes-gcm = "0.10"
+rand = "0.8"
+hex = "0.4"
