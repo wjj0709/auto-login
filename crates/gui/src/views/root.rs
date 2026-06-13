@@ -395,6 +395,148 @@ fn run_login_in_thread(
     bg_running.store(false, Ordering::Relaxed);
 }
 
+/// 触发单个站点的签到：spawn 后台线程执行 checkin_accounts
+pub fn trigger_checkin_site(state: Entity<AppState>, site_id: i64, cx: &mut gpui::App) {
+    state.update(cx, |st, cx| {
+        if st.bg_running.load(Ordering::Relaxed) {
+            return;
+        }
+        let now = chrono::Local::now().format("%H:%M:%S").to_string();
+
+        let (tx, rx) = mpsc::channel::<LogEntry>();
+        st.log_rx = Some(rx);
+        st.log_drawer_open = true;
+        st.running = true;
+        st.run_progress = Some(format!("签到站点 #{}…", site_id));
+        st.log_entries.push(LogEntry {
+            timestamp: now,
+            level: LogLevel::Info,
+            message: format!("开始签到站点 #{}", site_id),
+        });
+
+        let bg_running = Arc::new(AtomicBool::new(true));
+        st.bg_running = bg_running.clone();
+
+        let db_path = anyrouter_core::storage::Storage::default_path();
+        std::thread::spawn(move || {
+            run_checkin_site_in_thread(db_path, site_id, tx, bg_running);
+        });
+
+        cx.notify();
+    });
+}
+
+fn run_checkin_site_in_thread(
+    db_path: std::path::PathBuf,
+    site_id: i64,
+    tx: mpsc::Sender<LogEntry>,
+    bg_running: Arc<AtomicBool>,
+) {
+    let send = |level: LogLevel, msg: String| {
+        let _ = tx.send(LogEntry {
+            timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
+            level,
+            message: msg,
+        });
+    };
+
+    let storage = match anyrouter_core::storage::Storage::open(&db_path) {
+        Ok(s) => s,
+        Err(e) => {
+            send(LogLevel::Error, format!("打开数据库失败: {}", e));
+            bg_running.store(false, Ordering::Relaxed);
+            return;
+        }
+    };
+
+    let site = match storage.get_site(site_id) {
+        Ok(Some(s)) => s,
+        _ => {
+            send(LogLevel::Error, format!("站点 #{} 不存在", site_id));
+            bg_running.store(false, Ordering::Relaxed);
+            return;
+        }
+    };
+
+    let accounts = match storage.list_accounts_by_site(site_id) {
+        Ok(a) => a,
+        Err(e) => {
+            send(LogLevel::Error, format!("读取账户失败: {}", e));
+            bg_running.store(false, Ordering::Relaxed);
+            return;
+        }
+    };
+
+    if accounts.is_empty() {
+        send(
+            LogLevel::Warning,
+            format!("[{}] 该站点暂无账户", site.name),
+        );
+        bg_running.store(false, Ordering::Relaxed);
+        return;
+    }
+
+    let rt = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            send(LogLevel::Error, format!("创建 runtime 失败: {}", e));
+            bg_running.store(false, Ordering::Relaxed);
+            return;
+        }
+    };
+
+    send(
+        LogLevel::Info,
+        format!("[{}] 签到 {} 个账户中…", site.name, accounts.len()),
+    );
+
+    match rt.block_on(anyrouter_core::service::checkin_accounts(
+        &storage, &site, &accounts, true,
+    )) {
+        Ok(results) => {
+            let mut ok = 0;
+            let mut fail = 0;
+            for r in results {
+                if r.success {
+                    ok += 1;
+                    let after = r
+                        .balance_after
+                        .map(|b| format!(" 余额 ${:.2}", b))
+                        .unwrap_or_default();
+                    send(
+                        LogLevel::Success,
+                        format!("[{}] {} 签到成功{}", site.name, r.account_name, after),
+                    );
+                } else {
+                    fail += 1;
+                    send(
+                        LogLevel::Error,
+                        format!(
+                            "[{}] {} 签到失败：{}",
+                            site.name,
+                            r.account_name,
+                            r.error.unwrap_or_else(|| "未知错误".into())
+                        ),
+                    );
+                }
+            }
+            send(
+                LogLevel::Info,
+                format!("[{}] 完成：成功 {} / 失败 {}", site.name, ok, fail),
+            );
+        }
+        Err(e) => send(
+            LogLevel::Error,
+            format!("[{}] 调用 Playwright 失败: {}", site.name, e),
+        ),
+    }
+
+    bg_running.store(false, Ordering::Relaxed);
+}
+
 /// GUI 入口（由 main.rs 调用）
 pub fn run_app(storage: anyrouter_core::storage::Storage) {
     let db_path = anyrouter_core::storage::Storage::default_path();

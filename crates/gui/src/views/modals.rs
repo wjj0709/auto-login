@@ -174,20 +174,34 @@ fn render_account_list(
         );
     }
 
-    let state_close = state;
+    let state_close = state.clone();
+    let state_checkin = state;
     panel(
         format!("{} · 账户管理", site_name),
         list.into_any_element(),
-        vec![PanelButton {
-            label: "关闭".into(),
-            danger: false,
-            on_click: Box::new(move |cx| {
-                state_close.update(cx, |st, cx| {
-                    st.active_modal = None;
-                    cx.notify();
-                });
-            }),
-        }],
+        vec![
+            PanelButton {
+                label: "⚡ 签到本站点".into(),
+                danger: false,
+                on_click: Box::new(move |cx| {
+                    crate::views::root::trigger_checkin_site(state_checkin.clone(), site_id, cx);
+                    state_checkin.update(cx, |st, cx| {
+                        st.active_modal = None;
+                        cx.notify();
+                    });
+                }),
+            },
+            PanelButton {
+                label: "关闭".into(),
+                danger: false,
+                on_click: Box::new(move |cx| {
+                    state_close.update(cx, |st, cx| {
+                        st.active_modal = None;
+                        cx.notify();
+                    });
+                }),
+            },
+        ],
         px(520.0),
     )
 }
