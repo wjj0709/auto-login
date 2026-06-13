@@ -1,5 +1,6 @@
 mod app_state;
 mod theme;
+mod views;
 
 use app_state::AppState;
 use eframe::egui;
@@ -82,12 +83,8 @@ impl eframe::App for AnyRouterApp {
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(theme::WINDOW_BG).inner_margin(egui::Margin::same(24)))
             .show(ctx, |ui| {
-                ui.centered_and_justified(|ui| {
-                    ui.label(
-                        egui::RichText::new("\u{4e3b}\u{9875}\u{89c6}\u{56fe} \u{2014} \u{5f85}\u{5b9e}\u{73b0}")
-                            .size(20.0)
-                            .color(theme::TEXT_MUTED),
-                    );
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    views::home::render_home(ui, &mut self.state);
                 });
             });
     }

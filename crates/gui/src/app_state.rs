@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use anyrouter_core::models::SiteWithStats;
+use anyrouter_core::models::{Site, SiteWithStats};
 
 /// 当前主视图
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,7 +59,48 @@ impl Default for AppState {
             current_view: ViewKind::Home,
             log_drawer_open: false,
             active_modal: None,
-            sites: Vec::new(),
+            sites: vec![
+                SiteWithStats {
+                    site: Site {
+                        id: 1,
+                        name: "AnyRouter".into(),
+                        domain: "https://anyrouter.top".into(),
+                        login_path: "/login".into(),
+                        sign_in_path: Some("/sign-in".into()),
+                        user_info_path: "/api/user".into(),
+                        tokens_path: "/api/tokens".into(),
+                        logs_path: "/api/logs".into(),
+                        chart_path: "/api/chart".into(),
+                        api_user_key: "email".into(),
+                        created_at: "2025-01-01".into(),
+                        updated_at: "2025-01-01".into(),
+                    },
+                    account_count: 3,
+                    total_balance: 37.50,
+                    expired_count: 1,
+                    checkin_today: 2,
+                },
+                SiteWithStats {
+                    site: Site {
+                        id: 2,
+                        name: "AgentRouter".into(),
+                        domain: "https://agentrouter.org".into(),
+                        login_path: "/login".into(),
+                        sign_in_path: Some("/sign-in".into()),
+                        user_info_path: "/api/user".into(),
+                        tokens_path: "/api/tokens".into(),
+                        logs_path: "/api/logs".into(),
+                        chart_path: "/api/chart".into(),
+                        api_user_key: "email".into(),
+                        created_at: "2025-01-01".into(),
+                        updated_at: "2025-01-01".into(),
+                    },
+                    account_count: 2,
+                    total_balance: 19.30,
+                    expired_count: 0,
+                    checkin_today: 2,
+                },
+            ],
             log_entries: Vec::new(),
             running: false,
             run_progress: None,
