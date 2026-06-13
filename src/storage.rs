@@ -539,6 +539,9 @@ pub fn host_of(domain: &str) -> &str {
 
 /// 旧格式 cookies(对象或 "k=v; " 串)→ (结构化数组, _username, _password)。
 /// 手动录入/导入场景:expires 置 -1(未知),domain 取站点 host。
+///
+/// entries 的 domain 字段可能含端口(取自站点配置),仅作存档展示;
+/// 如需直接喂 Playwright add_cookies,须先去端口并重推导。
 #[allow(dead_code)] // Task 7 .env 导入接入后使用
 pub fn cookies_value_to_entries(
     raw: &serde_json::Value,
@@ -548,15 +551,24 @@ pub fn cookies_value_to_entries(
     match raw {
         serde_json::Value::Object(map) => {
             for (k, v) in map {
-                if let Some(s) = v.as_str() {
-                    pairs.push((k.clone(), s.to_string()));
-                }
+                // 与 Python 通路 str(v) 对齐:数字/bool 强转字符串,不得静默丢弃
+                let s = match v {
+                    serde_json::Value::String(s) => s.clone(),
+                    serde_json::Value::Number(n) => n.to_string(),
+                    serde_json::Value::Bool(b) => b.to_string(),
+                    _ => continue, // 嵌套结构无 cookie 语义,跳过
+                };
+                pairs.push((k.clone(), s));
             }
         }
         serde_json::Value::String(s) => {
             for part in s.split(';') {
                 if let Some((k, v)) = part.split_once('=') {
-                    pairs.push((k.trim().to_string(), v.trim().to_string()));
+                    let k = k.trim();
+                    if k.is_empty() {
+                        continue; // 空键(如 "=v")非法 cookie,浏览器会拒,直接跳过
+                    }
+                    pairs.push((k.to_string(), v.trim().to_string()));
                 }
             }
         }
@@ -902,12 +914,32 @@ mod tests {
     }
 
     #[test]
+    fn cookie_object_coerces_non_string_values() {
+        // 现有 Python 通路(parse_cookies)用 str(v) 强转,数字/bool 值 cookie 能正常签到;
+        // 导入侧若静默丢弃即丢数据,必须转字符串保留
+        let raw = serde_json::json!({"n": 123, "b": true, "s": "x"});
+        let (entries, username, password) = cookies_value_to_entries(&raw, "a.com");
+        assert_eq!(username, None);
+        assert_eq!(password, None);
+        assert_eq!(entries.len(), 3);
+        let n = entries.iter().find(|e| e["name"] == "n").unwrap();
+        assert_eq!(n["value"], "123");
+        let b = entries.iter().find(|e| e["name"] == "b").unwrap();
+        assert_eq!(b["value"], "true");
+    }
+
+    #[test]
     fn cookie_string_to_entries() {
-        let raw = serde_json::json!("session=abc; acw_tc=x");
+        // 钉住三个解析边界:值含 base64 padding 的 '='(split_once 只切第一个 '=')、
+        // 空键段("=bad" 不得产出空名 entry)、尾随分号(空段跳过)
+        let raw = serde_json::json!("session=YWJjZA==; =bad; acw_tc=x;");
         let (entries, username, password) = cookies_value_to_entries(&raw, "a.com");
         assert_eq!(username, None);
         assert_eq!(password, None);
         assert_eq!(entries.len(), 2);
+        let session = entries.iter().find(|e| e["name"] == "session").unwrap();
+        assert_eq!(session["value"], "YWJjZA==");
+        assert!(entries.iter().all(|e| e["name"] != ""), "不得产出空名 entry");
     }
 
     #[test]
