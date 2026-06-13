@@ -2,7 +2,7 @@ mod app_state;
 mod theme;
 mod views;
 
-use app_state::AppState;
+use app_state::{AppState, ViewKind};
 use eframe::egui;
 
 /// Root application struct
@@ -79,14 +79,33 @@ impl eframe::App for AnyRouterApp {
                 });
             });
 
+        // ─── 日志抽屉（底部栏上方）──────────────────────────────
+        if self.state.log_drawer_open {
+            egui::TopBottomPanel::bottom("log_drawer_panel")
+                .exact_height(200.0)
+                .show(ctx, |ui| {
+                    views::log_drawer::render_log_drawer(ui, &mut self.state);
+                });
+        }
+
         // ─── 中间内容区 ──────────────────────────────────────────
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(theme::WINDOW_BG).inner_margin(egui::Margin::same(24)))
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
-                    views::home::render_home(ui, &mut self.state);
+                    match self.state.current_view.clone() {
+                        ViewKind::Home => {
+                            views::home::render_home(ui, &mut self.state);
+                        }
+                        ViewKind::AccountDetail(id) => {
+                            views::detail::render_account_detail(ui, &mut self.state, id);
+                        }
+                    }
                 });
             });
+
+        // ─── 弹窗层（在所有面板之后渲染）─────────────────────────
+        views::modals::render_modals(ctx, &mut self.state);
     }
 }
 

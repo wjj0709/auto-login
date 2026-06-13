@@ -51,6 +51,20 @@ pub struct AppState {
     pub log_entries: Vec<LogEntry>,
     pub running: bool,
     pub run_progress: Option<String>,
+
+    /// 详情页当前 Tab 索引
+    pub active_tab: usize,
+
+    // ─── 表单缓冲区（站点表单）─────────────────────────────────
+    pub form_site_name: String,
+    pub form_site_domain: String,
+
+    // ─── 表单缓冲区（账户表单）─────────────────────────────────
+    pub form_account_name: String,
+    pub form_account_api_user: String,
+    pub form_account_cookie: String,
+    pub form_account_username: String,
+    pub form_account_password: String,
 }
 
 impl Default for AppState {
@@ -101,9 +115,33 @@ impl Default for AppState {
                     checkin_today: 2,
                 },
             ],
-            log_entries: Vec::new(),
+            log_entries: vec![
+                LogEntry {
+                    timestamp: "10:00:01".into(),
+                    level: LogLevel::Info,
+                    message: "应用启动完成".into(),
+                },
+                LogEntry {
+                    timestamp: "10:00:02".into(),
+                    level: LogLevel::Success,
+                    message: "数据库连接成功".into(),
+                },
+                LogEntry {
+                    timestamp: "10:00:03".into(),
+                    level: LogLevel::Warning,
+                    message: "账户 charlie@example.com Cookie 即将过期".into(),
+                },
+            ],
             running: false,
             run_progress: None,
+            active_tab: 0,
+            form_site_name: String::new(),
+            form_site_domain: String::new(),
+            form_account_name: String::new(),
+            form_account_api_user: String::new(),
+            form_account_cookie: String::new(),
+            form_account_username: String::new(),
+            form_account_password: String::new(),
         }
     }
 }
