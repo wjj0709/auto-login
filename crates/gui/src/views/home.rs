@@ -14,6 +14,8 @@ pub fn render(state: Entity<AppState>, cx: &mut Context<RootView>) -> AnyElement
 
     let sites_data: Vec<_> = snap.sites.clone();
 
+    let is_empty = sites_data.is_empty();
+
     div()
         .id("home-scroll")
         .size_full()
@@ -29,7 +31,45 @@ pub fn render(state: Entity<AppState>, cx: &mut Context<RootView>) -> AnyElement
             total_today,
             total_today_target,
         ))
+        .when(is_empty, |this| this.child(render_empty_hint()))
         .child(render_site_grid(sites_data, state))
+        .into_any_element()
+}
+
+fn render_empty_hint() -> AnyElement {
+    div()
+        .w_full()
+        .p(px(24.0))
+        .bg(theme::bg_card())
+        .border_1()
+        .border_dashed()
+        .border_color(theme::border_normal())
+        .rounded(px(10.0))
+        .flex()
+        .flex_col()
+        .gap(px(8.0))
+        .items_center()
+        .text_color(theme::text_muted())
+        .text_size(px(12.0))
+        .child(
+            div()
+                .text_color(theme::text_primary())
+                .text_size(px(14.0))
+                .child("欢迎使用 AnyRouter 客户端 👋"),
+        )
+        .child(div().child("当前没有任何站点。可通过以下方式添加："))
+        .child(
+            div()
+                .text_color(theme::text_weakest())
+                .text_size(px(11.0))
+                .child("• 在 .env 文件设置 ANYROUTER_ACCOUNTS 后重启应用（自动导入）"),
+        )
+        .child(
+            div()
+                .text_color(theme::text_weakest())
+                .text_size(px(11.0))
+                .child("• 直接编辑 SQLite 数据库 %APPDATA%/anyrouter-checkin/data.db"),
+        )
         .into_any_element()
 }
 
