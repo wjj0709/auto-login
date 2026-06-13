@@ -8,7 +8,9 @@ use base64::Engine;
 use chrono::{Local, SecondsFormat};
 use rusqlite::{Connection, OptionalExtension};
 
+use crate::config::{AccountConfig, ProviderConfig};
 use crate::crypto::Crypto;
+use crate::log;
 
 /// 站点(完整行)
 #[allow(dead_code)] // Task 4 站点 CRUD 接入后使用
@@ -94,6 +96,15 @@ pub struct AccountInput {
     pub cookies_json: Option<String>,
     pub cookie_issued_at: Option<String>,
     pub cookie_expires_at: Option<String>,
+}
+
+/// 导入结果摘要(写日志用)
+#[allow(dead_code)] // Task 8 应用接线接入后使用
+#[derive(Debug, Default, PartialEq)]
+pub struct ImportReport {
+    pub sites_added: usize,
+    pub accounts_added: usize,
+    pub accounts_skipped: usize,
 }
 
 pub struct Storage {
@@ -508,6 +519,109 @@ impl Storage {
             Some(b) => Ok(Some(self.crypto.decrypt(&b)?)),
             None => Ok(None),
         }
+    }
+
+    /// 首次启动导入:meta.env_imported 存在则跳过。
+    #[allow(dead_code)] // Task 8 应用接线接入后使用
+    pub fn import_env_if_needed(&self) -> Result<()> {
+        if self.get_meta("env_imported")?.is_some() {
+            return Ok(());
+        }
+        let providers = std::env::var("PROVIDERS").ok();
+        let accounts = std::env::var("ANYROUTER_ACCOUNTS").ok();
+        let report = self.import_from_strings(providers.as_deref(), accounts.as_deref())?;
+        log::success(&format!(
+            "环境变量导入完成:新增站点 {},账户 {},跳过 {}",
+            report.sites_added, report.accounts_added, report.accounts_skipped
+        ));
+        self.set_meta("env_imported", "1")
+    }
+
+    /// 导入内置站点 + PROVIDERS + ANYROUTER_ACCOUNTS;可重复调用(按唯一键去重)。
+    #[allow(dead_code)] // Task 8 应用接线接入后使用
+    pub fn import_from_strings(
+        &self,
+        providers_json: Option<&str>,
+        accounts_json: Option<&str>,
+    ) -> Result<ImportReport> {
+        let mut report = ImportReport::default();
+
+        // 1) 内置站点
+        let mut anyrouter = SiteInput::with_defaults("anyrouter", "https://anyrouter.top");
+        anyrouter.sign_in_path = Some("/api/user/sign_in".to_string());
+        let mut agentrouter = SiteInput::with_defaults("agentrouter", "https://agentrouter.org");
+        agentrouter.sign_in_path = None;
+        for input in [anyrouter, agentrouter] {
+            if self.find_site_by_name(&input.name)?.is_none() {
+                self.insert_site(&input)?;
+                report.sites_added += 1;
+            }
+        }
+
+        // 2) 自定义站点(PROVIDERS)
+        if let Some(json) = providers_json {
+            match serde_json::from_str::<std::collections::HashMap<String, ProviderConfig>>(json) {
+                Ok(customs) => {
+                    for (key, p) in customs {
+                        if self.find_site_by_name(&key)?.is_some() {
+                            continue;
+                        }
+                        let mut input = SiteInput::with_defaults(&key, &p.domain);
+                        input.login_path = p.login_path.clone();
+                        input.sign_in_path = p.sign_in_path.clone();
+                        input.user_info_path = p.user_info_path.clone();
+                        input.api_user_key = p.api_user_key.clone();
+                        self.insert_site(&input)?;
+                        report.sites_added += 1;
+                    }
+                }
+                Err(e) => log::warn(&format!("PROVIDERS 解析失败,跳过导入: {}", e)),
+            }
+        }
+
+        // 3) 账户(ANYROUTER_ACCOUNTS)
+        if let Some(json) = accounts_json {
+            match serde_json::from_str::<Vec<AccountConfig>>(json) {
+                Ok(accounts) => {
+                    for (i, acc) in accounts.iter().enumerate() {
+                        let name = acc.get_display_name(i);
+                        let Some(site) = self.find_site_by_name(&acc.provider)? else {
+                            log::warn(&format!("账户 {} 引用了不存在的站点 {},跳过", name, acc.provider));
+                            report.accounts_skipped += 1;
+                            continue;
+                        };
+                        if self
+                            .list_accounts(site.id)?
+                            .iter()
+                            .any(|a| a.name == name)
+                        {
+                            continue; // 幂等:同站点同名已存在
+                        }
+                        let (entries, username, password) =
+                            cookies_value_to_entries(&acc.cookies, host_of(&site.domain));
+                        let has_cookies = !entries.is_empty();
+                        self.insert_account(&AccountInput {
+                            site_id: site.id,
+                            name,
+                            api_user: acc.api_user.clone(),
+                            username,
+                            password,
+                            cookies_json: if has_cookies {
+                                Some(serde_json::to_string(&entries).context("序列化 cookie 数组失败")?)
+                            } else {
+                                None
+                            },
+                            cookie_issued_at: if has_cookies { Some(now_iso()) } else { None },
+                            cookie_expires_at: None,
+                        })?;
+                        report.accounts_added += 1;
+                    }
+                }
+                Err(e) => log::warn(&format!("ANYROUTER_ACCOUNTS 解析失败,跳过导入: {}", e)),
+            }
+        }
+
+        Ok(report)
     }
 
     /// 仅测试用:读取账户三个加密列的原始 BLOB。
@@ -958,5 +1072,55 @@ mod tests {
         assert_eq!(host_of("https://a.com/path"), "a.com");
         assert_eq!(host_of("http://a.com:8080"), "a.com:8080");
         assert_eq!(host_of("a.com"), "a.com");
+    }
+
+    #[test]
+    fn import_seeds_builtins_and_parses_env() {
+        let s = test_storage();
+        let providers = r#"{"custom":{"domain":"https://c.example.com","sign_in_path":null}}"#;
+        let accounts = r#"[
+            {"cookies":{"session":"abc","_username":"u1","_password":"p1"},
+             "api_user":"111","provider":"anyrouter","name":"用户A"},
+            {"cookies":"session=s2; k=v","api_user":"222","provider":"custom"},
+            {"cookies":{},"api_user":"333","provider":"不存在的站点"}
+        ]"#;
+        let report = s.import_from_strings(Some(providers), Some(accounts)).unwrap();
+        assert_eq!(report.sites_added, 3); // anyrouter + agentrouter + custom
+        assert_eq!(report.accounts_added, 2);
+        assert_eq!(report.accounts_skipped, 1);
+
+        // 内置站点
+        let any = s.find_site_by_name("anyrouter").unwrap().unwrap();
+        assert_eq!(any.domain, "https://anyrouter.top");
+        assert_eq!(any.sign_in_path.as_deref(), Some("/api/user/sign_in"));
+        let agent = s.find_site_by_name("agentrouter").unwrap().unwrap();
+        assert_eq!(agent.sign_in_path, None);
+        // 自定义站点:显式 null → 自动签到
+        let custom = s.find_site_by_name("custom").unwrap().unwrap();
+        assert_eq!(custom.sign_in_path, None);
+
+        // 账户:凭据抽取 + cookie 结构化 + 名称缺省
+        let a = &s.list_accounts(any.id).unwrap()[0];
+        assert_eq!(a.name, "用户A");
+        assert_eq!(a.username.as_deref(), Some("u1"));
+        assert!(a.cookies_json.as_deref().unwrap().contains("session"));
+        assert!(!a.cookies_json.as_deref().unwrap().contains("_username"));
+        assert!(a.cookie_issued_at.is_some());
+        assert!(a.cookie_expires_at.is_none());
+        let b = &s.list_accounts(custom.id).unwrap()[0];
+        assert_eq!(b.name, "Account 2"); // 与旧 get_display_name 序号规则一致
+
+        // 幂等:重复导入不新增
+        let report2 = s.import_from_strings(Some(providers), Some(accounts)).unwrap();
+        assert_eq!(report2.sites_added, 0);
+        assert_eq!(report2.accounts_added, 0);
+    }
+
+    #[test]
+    fn import_tolerates_bad_json() {
+        let s = test_storage();
+        let report = s.import_from_strings(Some("{bad"), Some("[bad")).unwrap();
+        assert_eq!(report.sites_added, 2); // 内置站点仍写入
+        assert_eq!(report.accounts_added, 0);
     }
 }
