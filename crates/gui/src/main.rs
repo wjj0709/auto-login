@@ -1,4 +1,5 @@
 mod app_state;
+mod components;
 mod theme;
 mod views;
 

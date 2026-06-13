@@ -696,6 +696,7 @@ fn run_checkin_account_in_thread(
 pub fn run_app(storage: anyrouter_core::storage::Storage) {
     let db_path = anyrouter_core::storage::Storage::default_path();
     application().run(move |cx: &mut App| {
+        bind_text_input_keys(cx);
         let state = cx.new(|_| AppState::from_storage(storage));
         let bounds = Bounds::centered(None, size(px(1100.0), px(750.0)), cx);
         cx.open_window(
@@ -711,6 +712,29 @@ pub fn run_app(storage: anyrouter_core::storage::Storage) {
         // 启动后台日志轮询：每 200ms 把 channel 中的日志写入 state
         spawn_log_poller(state, db_path, cx);
     });
+}
+
+/// 绑定文本输入框所需的键位（Windows 使用 ctrl，macOS 兼容 cmd）
+fn bind_text_input_keys(cx: &mut App) {
+    use crate::components::text_input::*;
+    cx.bind_keys([
+        gpui::KeyBinding::new("backspace", TextBackspace, Some("TextInput")),
+        gpui::KeyBinding::new("delete", TextDelete, Some("TextInput")),
+        gpui::KeyBinding::new("left", TextLeft, Some("TextInput")),
+        gpui::KeyBinding::new("right", TextRight, Some("TextInput")),
+        gpui::KeyBinding::new("shift-left", TextSelectLeft, Some("TextInput")),
+        gpui::KeyBinding::new("shift-right", TextSelectRight, Some("TextInput")),
+        gpui::KeyBinding::new("home", TextHome, Some("TextInput")),
+        gpui::KeyBinding::new("end", TextEnd, Some("TextInput")),
+        gpui::KeyBinding::new("ctrl-a", TextSelectAll, Some("TextInput")),
+        gpui::KeyBinding::new("ctrl-c", TextCopy, Some("TextInput")),
+        gpui::KeyBinding::new("ctrl-x", TextCut, Some("TextInput")),
+        gpui::KeyBinding::new("ctrl-v", TextPaste, Some("TextInput")),
+        gpui::KeyBinding::new("cmd-a", TextSelectAll, Some("TextInput")),
+        gpui::KeyBinding::new("cmd-c", TextCopy, Some("TextInput")),
+        gpui::KeyBinding::new("cmd-x", TextCut, Some("TextInput")),
+        gpui::KeyBinding::new("cmd-v", TextPaste, Some("TextInput")),
+    ]);
 }
 
 fn spawn_log_poller(state: Entity<AppState>, _db_path: std::path::PathBuf, cx: &mut App) {
