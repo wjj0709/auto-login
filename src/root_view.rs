@@ -6,6 +6,7 @@ use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::Disableable;
 use gpui_component::{Root, TitleBar};
 
+use crate::account_detail::AccountDetail;
 use crate::app_state::{AppState, AppView};
 use crate::home_view::HomeView;
 use crate::log_panel::LogPanel;
@@ -16,15 +17,17 @@ use crate::theme::Glass;
 pub struct RootView {
     app_state: Entity<AppState>,
     home_view: Entity<HomeView>,
+    account_detail: Entity<AccountDetail>,
     log_panel: Entity<LogPanel>,
 }
 
 impl RootView {
     pub fn new(app_state: Entity<AppState>, _window: &mut Window, cx: &mut Context<Self>) -> Self {
         let home_view = cx.new(|_| HomeView::new(app_state.clone()));
+        let account_detail = cx.new(|_| AccountDetail::new(app_state.clone()));
         let log_panel = cx.new(|_| LogPanel::new(app_state.clone()));
         cx.observe(&app_state, |_, _, cx| cx.notify()).detach();
-        Self { app_state, home_view, log_panel }
+        Self { app_state, home_view, account_detail, log_panel }
     }
 
     fn trigger_checkin_all(&mut self, cx: &mut Context<Self>) {
@@ -183,11 +186,7 @@ impl Render for RootView {
 
         let content = match view {
             AppView::Home => self.home_view.clone().into_any_element(),
-            AppView::AccountDetail(_id) => div()
-                .p_6()
-                .text_color(Glass::text_muted())
-                .child("账户详情页(待实现)")
-                .into_any_element(),
+            AppView::AccountDetail(_id) => self.account_detail.clone().into_any_element(),
         };
 
         div()

@@ -13,7 +13,6 @@ pub enum CheckinScope {
     All,
     #[allow(dead_code)] // Milestone C「签到本站点」接入后使用
     Site(i64),
-    #[allow(dead_code)] // 详情页「签到」接入后使用
     Account(i64),
 }
 
