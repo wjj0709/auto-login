@@ -67,6 +67,7 @@ pub fn render(
     let state_back = state.clone();
     let state_for_tabs = state.clone();
     let state_for_refresh = state.clone();
+    let state_for_checkin = state.clone();
     let account_for_tab = account_opt.clone();
 
     div()
@@ -81,6 +82,7 @@ pub fn render(
         .child(render_header(
             state_back,
             state_for_refresh,
+            state_for_checkin,
             account_id,
             account_display.clone(),
             site_name,
@@ -102,6 +104,7 @@ pub fn render(
 fn render_header(
     state: Entity<AppState>,
     state_refresh: Entity<AppState>,
+    state_checkin: Entity<AppState>,
     account_id: i64,
     account_name: String,
     site_name: String,
@@ -149,6 +152,28 @@ fn render_header(
                     Some(t) => format!("上次更新 {}", t.split('T').next().unwrap_or(&t)),
                     None => "尚未拉取".to_string(),
                 }))
+                .child(
+                    div()
+                        .id("detail-checkin")
+                        .px(px(10.0))
+                        .py(px(3.0))
+                        .bg(theme::btn_primary_bg())
+                        .border_1()
+                        .border_color(theme::btn_primary_border())
+                        .rounded(px(5.0))
+                        .text_color(theme::accent_blue())
+                        .text_size(px(10.0))
+                        .cursor_pointer()
+                        .hover(|this| this.opacity(0.85))
+                        .child("⚡ 签到")
+                        .on_click(move |_, _w, cx| {
+                            crate::views::root::trigger_checkin_account(
+                                state_checkin.clone(),
+                                account_id,
+                                cx,
+                            );
+                        }),
+                )
                 .child(
                     div()
                         .id("detail-refresh")

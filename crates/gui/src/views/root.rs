@@ -537,6 +537,128 @@ fn run_checkin_site_in_thread(
     bg_running.store(false, Ordering::Relaxed);
 }
 
+/// 触发单个账户签到：spawn 后台线程执行 checkin_accounts（仅 1 个账户）
+pub fn trigger_checkin_account(state: Entity<AppState>, account_id: i64, cx: &mut gpui::App) {
+    state.update(cx, |st, cx| {
+        if st.bg_running.load(Ordering::Relaxed) {
+            return;
+        }
+        let now = chrono::Local::now().format("%H:%M:%S").to_string();
+
+        let (tx, rx) = mpsc::channel::<LogEntry>();
+        st.log_rx = Some(rx);
+        st.log_drawer_open = true;
+        st.running = true;
+        st.run_progress = Some(format!("签到账户 #{}…", account_id));
+        st.log_entries.push(LogEntry {
+            timestamp: now,
+            level: LogLevel::Info,
+            message: format!("开始签到账户 #{}", account_id),
+        });
+
+        let bg_running = Arc::new(AtomicBool::new(true));
+        st.bg_running = bg_running.clone();
+
+        let db_path = anyrouter_core::storage::Storage::default_path();
+        std::thread::spawn(move || {
+            run_checkin_account_in_thread(db_path, account_id, tx, bg_running);
+        });
+
+        cx.notify();
+    });
+}
+
+fn run_checkin_account_in_thread(
+    db_path: std::path::PathBuf,
+    account_id: i64,
+    tx: mpsc::Sender<LogEntry>,
+    bg_running: Arc<AtomicBool>,
+) {
+    let send = |level: LogLevel, msg: String| {
+        let _ = tx.send(LogEntry {
+            timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
+            level,
+            message: msg,
+        });
+    };
+
+    let storage = match anyrouter_core::storage::Storage::open(&db_path) {
+        Ok(s) => s,
+        Err(e) => {
+            send(LogLevel::Error, format!("打开数据库失败: {}", e));
+            bg_running.store(false, Ordering::Relaxed);
+            return;
+        }
+    };
+
+    let account = match storage.get_account(account_id) {
+        Ok(Some(a)) => a,
+        _ => {
+            send(LogLevel::Error, format!("账户 #{} 不存在", account_id));
+            bg_running.store(false, Ordering::Relaxed);
+            return;
+        }
+    };
+    let site = match storage.get_site(account.site_id) {
+        Ok(Some(s)) => s,
+        _ => {
+            send(LogLevel::Error, format!("站点 #{} 不存在", account.site_id));
+            bg_running.store(false, Ordering::Relaxed);
+            return;
+        }
+    };
+
+    let rt = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            send(LogLevel::Error, format!("创建 runtime 失败: {}", e));
+            bg_running.store(false, Ordering::Relaxed);
+            return;
+        }
+    };
+
+    match rt.block_on(anyrouter_core::service::checkin_accounts(
+        &storage,
+        &site,
+        std::slice::from_ref(&account),
+        true,
+    )) {
+        Ok(results) => {
+            if let Some(r) = results.into_iter().next() {
+                if r.success {
+                    let after = r
+                        .balance_after
+                        .map(|b| format!(" 余额 ${:.2}", b))
+                        .unwrap_or_default();
+                    send(
+                        LogLevel::Success,
+                        format!("[{}] {} 签到成功{}", site.name, r.account_name, after),
+                    );
+                } else {
+                    send(
+                        LogLevel::Error,
+                        format!(
+                            "[{}] {} 签到失败：{}",
+                            site.name,
+                            r.account_name,
+                            r.error.unwrap_or_else(|| "未知错误".into())
+                        ),
+                    );
+                }
+            }
+        }
+        Err(e) => send(
+            LogLevel::Error,
+            format!("[{}] 调用 Playwright 失败: {}", site.name, e),
+        ),
+    }
+
+    bg_running.store(false, Ordering::Relaxed);
+}
+
 /// GUI 入口（由 main.rs 调用）
 pub fn run_app(storage: anyrouter_core::storage::Storage) {
     let db_path = anyrouter_core::storage::Storage::default_path();
