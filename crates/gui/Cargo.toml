@@ -1,0 +1,13 @@
+[package]
+name = "anyrouter-gui"
+version = "0.1.0"
+edition = "2024"
+description = "AnyRouter GPUI desktop client"
+
+[dependencies]
+anyrouter-core = { path = "../core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+chrono = { workspace = true }
+anyhow = { workspace = true }

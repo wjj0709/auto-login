@@ -1,0 +1,14 @@
+[package]
+name = "anyrouter-checkin"
+version = "0.1.0"
+edition = "2024"
+description = "AnyRouter auto check-in tool (CLI)"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+chrono = { workspace = true }
+dotenvy = "0.15"
+sha2 = "0.10"
+lettre = { version = "0.11", features = ["tokio1-native-tls", "builder", "smtp-transport"] }

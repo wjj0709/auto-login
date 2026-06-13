@@ -31,6 +31,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "anyrouter-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "anyrouter-gui"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "anyrouter-core",
+ "chrono",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "async-trait"
 version = "0.1.89"
 source = "registry+https://github.com/rust-lang/crates.io-index"
