@@ -64,6 +64,10 @@ class AccountInput:
     cookies: Any = None
     username: str | None = None
     password: str | None = None
+    # 详情页接口路径（fetch_detail 任务用，checkin 任务可忽略）
+    tokens_path: str | None = None
+    logs_path: str | None = None
+    chart_path: str | None = None
 
 
 @dataclass
