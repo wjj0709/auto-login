@@ -100,19 +100,51 @@ impl AppState {
         if let Some(ref storage) = self.storage {
             match storage.list_sites() {
                 Ok(sites) => {
+                    let now_rfc = chrono::Utc::now().to_rfc3339();
+                    let today_prefix = chrono::Local::now().format("%Y-%m-%d").to_string();
                     self.sites = sites
                         .into_iter()
                         .map(|site| {
-                            let account_count = storage
+                            let accounts = storage
                                 .list_accounts_by_site(site.id)
-                                .map(|a| a.len())
-                                .unwrap_or(0);
+                                .unwrap_or_default();
+                            let account_count = accounts.len();
+                            let expired_count = accounts
+                                .iter()
+                                .filter(|a| {
+                                    a.cookie_expires_at
+                                        .as_ref()
+                                        .map(|exp| exp.as_str() < now_rfc.as_str())
+                                        .unwrap_or(false)
+                                })
+                                .count();
+
+                            let mut total_balance = 0.0_f64;
+                            let mut checkin_today = 0usize;
+                            for a in &accounts {
+                                if let Ok(Some(cache)) = storage.get_cache(
+                                    a.id,
+                                    anyrouter_core::models::CacheKind::Overview,
+                                ) {
+                                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(
+                                        &cache.payload_json,
+                                    ) {
+                                        if let Some(q) = v.get("quota").and_then(|x| x.as_f64()) {
+                                            total_balance += q / 500_000.0;
+                                        }
+                                    }
+                                    if cache.fetched_at.starts_with(&today_prefix) {
+                                        checkin_today += 1;
+                                    }
+                                }
+                            }
+
                             SiteWithStats {
                                 site,
                                 account_count,
-                                total_balance: 0.0,
-                                expired_count: 0,
-                                checkin_today: 0,
+                                total_balance,
+                                expired_count,
+                                checkin_today,
                             }
                         })
                         .collect();
