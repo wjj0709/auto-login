@@ -24,8 +24,11 @@ import traceback
 from dataclasses import dataclass, field
 from typing import Any
 
-# 确保 Windows 下 stdout/stderr 使用 UTF-8 编码
+# 确保 Windows 下 stdin/stdout/stderr 使用 UTF-8 编码
+# stdin 同样需要重配，否则 Rust 端写入的 UTF-8 JSON 被按 GBK 解码，
+# 中文字符变成代理对（如 \udcae），后续打印时报 UnicodeEncodeError。
 if sys.platform == "win32":
+    sys.stdin.reconfigure(encoding="utf-8", errors="replace")
     sys.stdout.reconfigure(encoding="utf-8")
     sys.stderr.reconfigure(encoding="utf-8")
     os.environ.setdefault("PYTHONIOENCODING", "utf-8")
