@@ -1,10 +1,9 @@
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::io::Write;
 use std::path::PathBuf;
-use std::process::Stdio;
+use std::process::{Command, Stdio};
 use std::time::Instant;
-use tokio::io::AsyncWriteExt;
-use tokio::process::Command;
 
 use crate::config::{AccountConfig, ProviderConfig};
 use crate::log;
@@ -243,6 +242,34 @@ async fn run_action(
         payload_accounts.len()
     ));
 
+    // 关键:GPUI 的执行器不是 Tokio runtime。绝不能在此 await tokio::process 的子进程 I/O
+    // ——其 Windows 实现的 poll_write 会调用 spawn_blocking → Handle::current(),
+    // 在没有 Tokio reactor 的前台任务里直接 panic("there is no reactor running"),
+    // 且因发生在不可 unwind 的窗口过程回调中,会升级为 STATUS_STACK_BUFFER_OVERRUN 崩溃。
+    //
+    // 改为:用 std::process 同步驱动子进程,放到独立 OS 线程执行(避免阻塞 UI 线程),
+    // 再用「runtime 无关」的 oneshot 把结果桥接回当前 GPUI 任务(oneshot 的 await 不依赖
+    // 任何 runtime,由 GPUI 自己的执行器驱动)。
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(run_subprocess_blocking(python, script, payload_str, start));
+    });
+
+    rx.await
+        .map_err(|_| "Playwright runner thread terminated unexpectedly".to_string())?
+}
+
+/// 同步驱动 Playwright 子进程并收集结果。**必须在独立线程中调用**(不依赖 Tokio runtime)。
+///
+/// 协议:子脚本 `main()` 先 `sys.stdin.read()` 读完整 stdin、再向 stdout 写结果
+/// (见 `scripts/playwright_checkin.py`),因此「写完 stdin → drop 关闭 → 读 stdout」的
+/// 顺序不会触发管道死锁;stderr 透传到终端(非管道),也不会占满缓冲区。
+fn run_subprocess_blocking(
+    python: String,
+    script: PathBuf,
+    payload_str: String,
+    start: Instant,
+) -> Result<Vec<PlaywrightResult>, String> {
     let mut child = Command::new(&python)
         .arg(&script)
         .stdin(Stdio::piped())
@@ -259,17 +286,12 @@ async fn run_action(
     if let Some(mut stdin) = child.stdin.take() {
         stdin
             .write_all(payload_str.as_bytes())
-            .await
             .map_err(|e| format!("Failed to write stdin: {}", e))?;
-        stdin
-            .shutdown()
-            .await
-            .map_err(|e| format!("Failed to close stdin: {}", e))?;
+        // 离开作用域时 drop(stdin) 关闭管道 → 子进程读到 EOF
     }
 
     let output = child
         .wait_with_output()
-        .await
         .map_err(|e| format!("Failed to wait child: {}", e))?;
 
     let elapsed = start.elapsed();
@@ -306,4 +328,122 @@ async fn run_action(
     }
 
     Ok(parsed.results)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use std::task::{Context, Poll, Wake, Waker};
+
+    /// 极简的「非 Tokio」执行器:在当前线程把 future 驱动到完成,全程没有任何 Tokio runtime。
+    /// 这复刻了 GPUI 前台执行器的环境——正是旧 `tokio::process` 代码 panic 的场景。
+    fn block_on<F: std::future::Future>(fut: F) -> F::Output {
+        struct ThreadWaker(std::thread::Thread);
+        impl Wake for ThreadWaker {
+            fn wake(self: Arc<Self>) {
+                self.0.unpark();
+            }
+            fn wake_by_ref(self: &Arc<Self>) {
+                self.0.unpark();
+            }
+        }
+
+        let waker: Waker = Arc::new(ThreadWaker(std::thread::current())).into();
+        let mut cx = Context::from_waker(&waker);
+        let mut fut = std::pin::pin!(fut);
+        loop {
+            match fut.as_mut().poll(&mut cx) {
+                Poll::Ready(out) => return out,
+                Poll::Pending => std::thread::park(),
+            }
+        }
+    }
+
+    /// 回归保护:把阻塞工作丢到 OS 线程、再用 oneshot 桥接回来,在没有 Tokio runtime 的
+    /// 执行器上 await 必须正常完成。旧实现在这一步会 panic("no reactor running")。
+    #[test]
+    fn bridge_completes_without_tokio_runtime() {
+        let got = block_on(async {
+            let (tx, rx) = tokio::sync::oneshot::channel::<i32>();
+            std::thread::spawn(move || {
+                let _ = tx.send(42);
+            });
+            rx.await.unwrap()
+        });
+        assert_eq!(got, 42);
+    }
+
+    /// 探测可用的 Python 解释器(优先 `PYTHON_BIN`/python3,Windows 回退 python)。
+    fn python_available() -> Option<String> {
+        for cand in [locate_python(), "python".to_string()] {
+            let ok = Command::new(&cand)
+                .arg("--version")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
+            if ok {
+                return Some(cand);
+            }
+        }
+        None
+    }
+
+    /// 端到端跑通签到主链路(`run_checkin` → std::process + 线程 + oneshot),全程无 Tokio runtime。
+    /// 用临时桩脚本回写合法 JSON,无需 playwright/chromium;没有 Python 则跳过(不误报)。
+    #[test]
+    fn run_action_end_to_end_under_non_tokio_executor() {
+        let Some(python) = python_available() else {
+            eprintln!("skip: 未找到 python/python3,跳过端到端子进程测试");
+            return;
+        };
+
+        let script = std::env::temp_dir().join("anyrouter_stub_runner.py");
+        std::fs::write(
+            &script,
+            "import sys, json\n\
+             req = json.loads(sys.stdin.read())\n\
+             results = [{\"name\": a[\"name\"], \"success\": True} for a in req[\"accounts\"]]\n\
+             print(json.dumps({\"results\": results}))\n",
+        )
+        .expect("write stub script");
+
+        std::env::set_var("PYTHON_BIN", &python);
+        std::env::set_var("PLAYWRIGHT_SCRIPT", &script);
+
+        let account = AccountConfig {
+            cookies: serde_json::json!({ "session": "x" }),
+            api_user: "u1".to_string(),
+            provider: "anyrouter".to_string(),
+            name: Some("7".to_string()),
+        };
+        let mut providers: HashMap<String, ProviderConfig> = HashMap::new();
+        providers.insert(
+            "anyrouter".to_string(),
+            ProviderConfig {
+                name: "anyrouter".to_string(),
+                domain: "https://example.com".to_string(),
+                login_path: "/login".to_string(),
+                sign_in_path: Some("/api/user/sign_in".to_string()),
+                user_info_path: "/api/user/self".to_string(),
+                api_user_key: "new-api-user".to_string(),
+                tokens_path: "/api/token/".to_string(),
+                logs_path: "/api/log/self".to_string(),
+                chart_path: "/api/data/self".to_string(),
+            },
+        );
+
+        let results = block_on(run_checkin(&[account], &providers))
+            .expect("run_checkin 应在非 Tokio 执行器上成功完成");
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "7");
+        assert!(results[0].success);
+
+        let _ = std::fs::remove_file(&script);
+    }
 }
