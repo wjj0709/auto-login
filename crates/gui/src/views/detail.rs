@@ -12,6 +12,7 @@ pub fn render(
 ) -> AnyElement {
     let snap = state.read(cx);
     let active_tab = snap.active_tab;
+    let running = snap.running;
 
     // 从 storage 拉取当前账户与站点信息
     let (account_opt, site_name) = if let Some(ref storage) = snap.storage {
@@ -87,6 +88,7 @@ pub fn render(
             account_display.clone(),
             site_name,
             last_updated,
+            running,
         ))
         // Tab 栏
         .child(render_tabs(active_tab, state_for_tabs))
@@ -109,6 +111,7 @@ fn render_header(
     account_name: String,
     site_name: String,
     last_updated: Option<String>,
+    running: bool,
 ) -> AnyElement {
     div()
         .w_full()
@@ -157,15 +160,28 @@ fn render_header(
                         .id("detail-checkin")
                         .px(px(10.0))
                         .py(px(3.0))
-                        .bg(theme::btn_primary_bg())
+                        .bg(if running {
+                            theme::bg_card()
+                        } else {
+                            theme::btn_primary_bg()
+                        })
                         .border_1()
-                        .border_color(theme::btn_primary_border())
+                        .border_color(if running {
+                            theme::border_normal()
+                        } else {
+                            theme::btn_primary_border()
+                        })
                         .rounded(px(5.0))
-                        .text_color(theme::accent_blue())
+                        .text_color(if running {
+                            theme::text_weakest()
+                        } else {
+                            theme::accent_blue()
+                        })
                         .text_size(px(10.0))
-                        .cursor_pointer()
-                        .hover(|this| this.opacity(0.85))
-                        .child("⚡ 签到")
+                        .when(!running, |this| {
+                            this.cursor_pointer().hover(|this| this.opacity(0.85))
+                        })
+                        .child(if running { "⏳ 运行中" } else { "⚡ 签到" })
                         .on_click(move |_, _w, cx| {
                             crate::views::root::trigger_checkin_account(
                                 state_checkin.clone(),
@@ -179,14 +195,27 @@ fn render_header(
                         .id("detail-refresh")
                         .px(px(10.0))
                         .py(px(3.0))
-                        .bg(theme::btn_primary_bg())
+                        .bg(if running {
+                            theme::bg_card()
+                        } else {
+                            theme::btn_primary_bg()
+                        })
                         .border_1()
-                        .border_color(theme::btn_primary_border())
+                        .border_color(if running {
+                            theme::border_normal()
+                        } else {
+                            theme::btn_primary_border()
+                        })
                         .rounded(px(5.0))
-                        .text_color(theme::accent_blue())
+                        .text_color(if running {
+                            theme::text_weakest()
+                        } else {
+                            theme::accent_blue()
+                        })
                         .text_size(px(10.0))
-                        .cursor_pointer()
-                        .hover(|this| this.opacity(0.85))
+                        .when(!running, |this| {
+                            this.cursor_pointer().hover(|this| this.opacity(0.85))
+                        })
                         .child("↻ 刷新数据")
                         .on_click(move |_, _w, cx| {
                             crate::views::root::trigger_fetch_detail(
