@@ -156,6 +156,11 @@ pub async fn run_playwright(payload: &PlaywrightPayload) -> Result<PlaywrightOut
     // 2. 定位脚本和 python 命令
     let script_path = locate_script();
     let python_cmd = locate_python();
+    eprintln!(
+        "[playwright] launching: {} {}",
+        python_cmd,
+        script_path.display()
+    );
 
     // 3. spawn 子进程
     let mut child = Command::new(&python_cmd)
@@ -186,6 +191,14 @@ pub async fn run_playwright(payload: &PlaywrightPayload) -> Result<PlaywrightOut
         .wait_with_output()
         .await
         .context("Failed to wait for playwright process")?;
+
+    // 把 Python 脚本的 stderr 转发到 Rust stderr，便于在 GUI 控制台跟踪
+    if !output.stderr.is_empty() {
+        let stderr_str = String::from_utf8_lossy(&output.stderr);
+        for line in stderr_str.lines() {
+            eprintln!("[playwright/stderr] {}", line);
+        }
+    }
 
     // 检查 exit code
     if !output.status.success() {

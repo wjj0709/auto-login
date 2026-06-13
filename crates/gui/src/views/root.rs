@@ -1,3 +1,4 @@
+use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -265,7 +266,7 @@ pub fn trigger_fetch_detail(state: Entity<AppState>, account_id: i64, cx: &mut g
         st.bg_running = bg_running.clone();
 
         let db_path = anyrouter_core::storage::Storage::default_path();
-        std::thread::spawn(move || {
+        spawn_bg("fetch_detail", tx.clone(), bg_running.clone(), move || {
             run_fetch_detail_in_thread(db_path, account_id, tx, bg_running);
         });
 
@@ -280,8 +281,11 @@ fn run_fetch_detail_in_thread(
     bg_running: Arc<AtomicBool>,
 ) {
     let send = |level: LogLevel, msg: String| {
+        let ts = chrono::Local::now().format("%H:%M:%S").to_string();
+        // 镜像到 stderr 便于在控制台跟踪
+        eprintln!("[{}] [{:?}] {}", ts, level, msg);
         let _ = tx.send(LogEntry {
-            timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
+            timestamp: ts,
             level,
             message: msg,
         });
@@ -370,7 +374,7 @@ pub fn trigger_login_account(state: Entity<AppState>, account_id: i64, cx: &mut 
         st.bg_running = bg_running.clone();
 
         let db_path = anyrouter_core::storage::Storage::default_path();
-        std::thread::spawn(move || {
+        spawn_bg("login_account", tx.clone(), bg_running.clone(), move || {
             run_login_in_thread(db_path, account_id, tx, bg_running);
         });
 
@@ -385,8 +389,11 @@ fn run_login_in_thread(
     bg_running: Arc<AtomicBool>,
 ) {
     let send = |level: LogLevel, msg: String| {
+        let ts = chrono::Local::now().format("%H:%M:%S").to_string();
+        // 镜像到 stderr 便于在控制台跟踪
+        eprintln!("[{}] [{:?}] {}", ts, level, msg);
         let _ = tx.send(LogEntry {
-            timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
+            timestamp: ts,
             level,
             message: msg,
         });
@@ -478,7 +485,7 @@ pub fn trigger_checkin_site(state: Entity<AppState>, site_id: i64, cx: &mut gpui
         st.bg_running = bg_running.clone();
 
         let db_path = anyrouter_core::storage::Storage::default_path();
-        std::thread::spawn(move || {
+        spawn_bg("checkin_site", tx.clone(), bg_running.clone(), move || {
             run_checkin_site_in_thread(db_path, site_id, tx, bg_running);
         });
 
@@ -493,8 +500,11 @@ fn run_checkin_site_in_thread(
     bg_running: Arc<AtomicBool>,
 ) {
     let send = |level: LogLevel, msg: String| {
+        let ts = chrono::Local::now().format("%H:%M:%S").to_string();
+        // 镜像到 stderr 便于在控制台跟踪
+        eprintln!("[{}] [{:?}] {}", ts, level, msg);
         let _ = tx.send(LogEntry {
-            timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
+            timestamp: ts,
             level,
             message: msg,
         });
@@ -620,7 +630,7 @@ pub fn trigger_checkin_account(state: Entity<AppState>, account_id: i64, cx: &mu
         st.bg_running = bg_running.clone();
 
         let db_path = anyrouter_core::storage::Storage::default_path();
-        std::thread::spawn(move || {
+        spawn_bg("checkin_account", tx.clone(), bg_running.clone(), move || {
             run_checkin_account_in_thread(db_path, account_id, tx, bg_running);
         });
 
@@ -635,8 +645,11 @@ fn run_checkin_account_in_thread(
     bg_running: Arc<AtomicBool>,
 ) {
     let send = |level: LogLevel, msg: String| {
+        let ts = chrono::Local::now().format("%H:%M:%S").to_string();
+        // 镜像到 stderr 便于在控制台跟踪
+        eprintln!("[{}] [{:?}] {}", ts, level, msg);
         let _ = tx.send(LogEntry {
-            timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
+            timestamp: ts,
             level,
             message: msg,
         });
@@ -741,9 +754,63 @@ fn window_control(
         .on_click(move |_, window, cx| on_click(window, cx))
 }
 
+/// 在后台线程中执行任务，捕获 panic 并通过 channel 报告异常，
+/// 同时确保 bg_running 标志在任何路径下都被清理。\n///\n/// 这能避免后台线程崩溃时主线程感知不到（既看不到日志也看不到\n/// 卡在「运行中」状态），所有 panic 信息都会同时写到 stderr 与日志抽屉。
+fn spawn_bg<F>(thread_name: &'static str, tx: mpsc::Sender<LogEntry>, bg_running: Arc<AtomicBool>, work: F)
+where
+    F: FnOnce() + Send + 'static,
+{
+    std::thread::spawn(move || {
+        let result = std::panic::catch_unwind(AssertUnwindSafe(work));
+        if let Err(payload) = result {
+            let msg = if let Some(s) = payload.downcast_ref::<&'static str>() {
+                (*s).to_string()
+            } else if let Some(s) = payload.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "unknown panic".to_string()
+            };
+            let ts = chrono::Local::now().format("%H:%M:%S").to_string();
+            let full = format!("[{}] 后台线程发生异常: {}", thread_name, msg);
+            eprintln!("[{}] [Error] {}", ts, full);
+            let _ = tx.send(LogEntry {
+                timestamp: ts,
+                level: LogLevel::Error,
+                message: full,
+            });
+        }
+        // 不论成功 / panic 都标记结束，避免 UI 卡在「运行中」
+        bg_running.store(false, Ordering::Relaxed);
+    });
+}
+
 /// GUI 入口（由 main.rs 调用）
 pub fn run_app(storage: anyrouter_core::storage::Storage) {
+    // 安装全局 panic hook，把任何线程 / 任何位置的 panic 都打印到 stderr
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let ts = chrono::Local::now().format("%H:%M:%S");
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}", l.file(), l.line()))
+            .unwrap_or_else(|| "<unknown>".to_string());
+        let msg = if let Some(s) = info.payload().downcast_ref::<&'static str>() {
+            (*s).to_string()
+        } else if let Some(s) = info.payload().downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "non-string panic payload".to_string()
+        };
+        eprintln!("[{}] [PANIC] @ {} -> {}", ts, location, msg);
+        default_hook(info);
+    }));
+
     let db_path = anyrouter_core::storage::Storage::default_path();
+    eprintln!(
+        "[{}] [Info] AnyRouter GUI 启动，数据库: {}",
+        chrono::Local::now().format("%H:%M:%S"),
+        db_path.display()
+    );
     application().run(move |cx: &mut App| {
         bind_text_input_keys(cx);
         let state = cx.new(|_| AppState::from_storage(storage));
@@ -848,7 +915,7 @@ fn trigger_checkin_all(state: Entity<AppState>, cx: &mut App) {
         st.bg_running = bg_running.clone();
 
         let db_path = anyrouter_core::storage::Storage::default_path();
-        std::thread::spawn(move || {
+        spawn_bg("checkin_all", tx.clone(), bg_running.clone(), move || {
             run_checkin_in_thread(db_path, tx, bg_running);
         });
 
@@ -862,8 +929,11 @@ fn run_checkin_in_thread(
     bg_running: Arc<AtomicBool>,
 ) {
     let send = |level: LogLevel, msg: String| {
+        let ts = chrono::Local::now().format("%H:%M:%S").to_string();
+        // 镜像到 stderr 便于在控制台跟踪
+        eprintln!("[{}] [{:?}] {}", ts, level, msg);
         let _ = tx.send(LogEntry {
-            timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
+            timestamp: ts,
             level,
             message: msg,
         });
