@@ -105,6 +105,8 @@ pub struct ImportReport {
     pub sites_added: usize,
     pub accounts_added: usize,
     pub accounts_skipped: usize,
+    /// JSON 解析失败的来源数(PROVIDERS / ANYROUTER_ACCOUNTS 各计 1);>0 时不写 env_imported
+    pub parse_errors: usize,
 }
 
 pub struct Storage {
@@ -534,6 +536,12 @@ impl Storage {
             "环境变量导入完成:新增站点 {},账户 {},跳过 {}",
             report.sites_added, report.accounts_added, report.accounts_skipped
         ));
+        // 解析有错时不写标记:修复 .env 后下次启动自动重试(幂等去重保证重试安全)。
+        // accounts_skipped(引用不存在站点等)不参与门控,避免用户删除的数据被反复复活。
+        if report.parse_errors > 0 {
+            log::warn("部分配置解析失败,未写入导入标记;修复 .env 后下次启动将自动重试");
+            return Ok(());
+        }
         self.set_meta("env_imported", "1")
     }
 
@@ -575,7 +583,10 @@ impl Storage {
                         report.sites_added += 1;
                     }
                 }
-                Err(e) => log::warn(&format!("PROVIDERS 解析失败,跳过导入: {}", e)),
+                Err(e) => {
+                    log::warn(&format!("PROVIDERS 解析失败,跳过导入: {}", e));
+                    report.parse_errors += 1;
+                }
             }
         }
 
@@ -584,18 +595,26 @@ impl Storage {
             match serde_json::from_str::<Vec<AccountConfig>>(json) {
                 Ok(accounts) => {
                     for (i, acc) in accounts.iter().enumerate() {
+                        // 缺省名按数组下标生成;若首轮导入失败且用户在重试前重排 .env,序号会漂移——
+                        // 已接受的窗口,同名碰撞由 api_user 比对兜底告警
                         let name = acc.get_display_name(i);
                         let Some(site) = self.find_site_by_name(&acc.provider)? else {
                             log::warn(&format!("账户 {} 引用了不存在的站点 {},跳过", name, acc.provider));
                             report.accounts_skipped += 1;
                             continue;
                         };
-                        if self
-                            .list_accounts(site.id)?
-                            .iter()
-                            .any(|a| a.name == name)
-                        {
-                            continue; // 幂等:同站点同名已存在
+                        // 幂等查重走 api_user 明文列,不触发解密:
+                        // 同名且同 api_user → 重试残留,静默跳过;
+                        // 同名不同 api_user → 真实命名碰撞,警告并计入跳过,避免静默丢数据。
+                        if let Some(existing) = self.find_account_api_user(site.id, &name)? {
+                            if existing != acc.api_user {
+                                log::warn(&format!(
+                                    "账户 {} 与既有账户同名但 api_user 不同,跳过导入",
+                                    name
+                                ));
+                                report.accounts_skipped += 1;
+                            }
+                            continue;
                         }
                         let (entries, username, password) =
                             cookies_value_to_entries(&acc.cookies, host_of(&site.domain));
@@ -617,11 +636,26 @@ impl Storage {
                         report.accounts_added += 1;
                     }
                 }
-                Err(e) => log::warn(&format!("ANYROUTER_ACCOUNTS 解析失败,跳过导入: {}", e)),
+                Err(e) => {
+                    log::warn(&format!("ANYROUTER_ACCOUNTS 解析失败,跳过导入: {}", e));
+                    report.parse_errors += 1;
+                }
             }
         }
 
         Ok(report)
+    }
+
+    /// 幂等查重:按(site_id, name)取既有账户的 api_user 明文列,不触发解密。
+    fn find_account_api_user(&self, site_id: i64, name: &str) -> Result<Option<String>> {
+        self.conn
+            .query_row(
+                "SELECT api_user FROM accounts WHERE site_id=?1 AND name=?2",
+                rusqlite::params![site_id, name],
+                |r| r.get(0),
+            )
+            .optional()
+            .context("查询账户重名失败")
     }
 
     /// 仅测试用:读取账户三个加密列的原始 BLOB。
@@ -1122,5 +1156,42 @@ mod tests {
         let report = s.import_from_strings(Some("{bad"), Some("[bad")).unwrap();
         assert_eq!(report.sites_added, 2); // 内置站点仍写入
         assert_eq!(report.accounts_added, 0);
+        // 两个来源各计 1 个解析错误;import_env_if_needed 据此不写 env_imported 标记
+        assert_eq!(report.parse_errors, 2);
+    }
+
+    #[test]
+    fn env_imported_marker_skips_reimport() {
+        // 标记存在时直接短路:不读环境变量,连内置站点也不种
+        let s = test_storage();
+        s.set_meta("env_imported", "1").unwrap();
+        s.import_env_if_needed().unwrap();
+        assert!(s.list_sites().unwrap().is_empty());
+    }
+
+    #[test]
+    fn import_name_collision_and_empty_cookies() {
+        let s = test_storage();
+        // 三条同站点账户:第 1 条空 cookie 正常导入;第 2 条同名不同 api_user → 告警跳过;
+        // 第 3 条与第 1 条完全相同 → 重试残留语义,静默幂等
+        let accounts = r#"[
+            {"cookies":{},"api_user":"1","provider":"anyrouter","name":"X"},
+            {"cookies":{},"api_user":"2","provider":"anyrouter","name":"X"},
+            {"cookies":{},"api_user":"1","provider":"anyrouter","name":"X"}
+        ]"#;
+        let report = s.import_from_strings(None, Some(accounts)).unwrap();
+        assert_eq!(report.accounts_added, 1);
+        assert_eq!(report.accounts_skipped, 1); // 仅同名不同 api_user 的第 2 条计数
+        assert_eq!(report.parse_errors, 0);
+
+        // 库中仍只 1 个账户,且保留首条的 api_user
+        let site = s.find_site_by_name("anyrouter").unwrap().unwrap();
+        let imported = s.list_accounts(site.id).unwrap();
+        assert_eq!(imported.len(), 1);
+        assert_eq!(imported[0].name, "X");
+        assert_eq!(imported[0].api_user, "1");
+        // 空 cookie:不产出空数组密文,也不记签发时间
+        assert_eq!(imported[0].cookies_json, None);
+        assert_eq!(imported[0].cookie_issued_at, None);
     }
 }
