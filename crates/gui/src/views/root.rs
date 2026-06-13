@@ -143,7 +143,10 @@ impl RootView {
 
     fn render_bottombar(&self, progress_text: String, cx: &mut Context<Self>) -> AnyElement {
         let state = self.state.clone();
-        let log_open = state.read(cx).log_drawer_open;
+        let snap = state.read(cx);
+        let log_open = snap.log_drawer_open;
+        let running = snap.running;
+        let log_count = snap.log_entries.len();
         let log_btn_bg = if log_open {
             theme::btn_primary_bg()
         } else {
@@ -160,6 +163,17 @@ impl RootView {
             theme::text_muted()
         };
 
+        let status_color = if running {
+            theme::warning_yellow()
+        } else {
+            theme::success_green()
+        };
+        let log_label = if log_count > 0 {
+            format!("▤ 日志 ({})", log_count)
+        } else {
+            "▤ 日志".to_string()
+        };
+
         div()
             .w_full()
             .h(px(28.0))
@@ -172,7 +186,7 @@ impl RootView {
             .px(px(12.0))
             .child(
                 div()
-                    .text_color(theme::text_muted())
+                    .text_color(status_color)
                     .text_size(px(10.0))
                     .child(progress_text),
             )
@@ -189,7 +203,7 @@ impl RootView {
                     .text_size(px(10.0))
                     .cursor_pointer()
                     .hover(|this| this.opacity(0.85))
-                    .child("▤ 日志")
+                    .child(log_label)
                     .on_click(move |_, _window, cx| {
                         state.update(cx, |state, cx| {
                             state.log_drawer_open = !state.log_drawer_open;
