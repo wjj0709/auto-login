@@ -340,6 +340,146 @@ impl Storage {
             updated_at: row.get(11)?,
         })
     }
+
+    #[allow(dead_code)] // Task 7/8 接入后使用
+    pub fn insert_account(&self, input: &AccountInput) -> Result<i64> {
+        let now = now_iso();
+        self.conn
+            .execute(
+                "INSERT INTO accounts(site_id, name, api_user, username_enc, password_enc,
+                                  cookies_enc, cookie_issued_at, cookie_expires_at,
+                                  created_at, updated_at)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?9)",
+                rusqlite::params![
+                    input.site_id, input.name, input.api_user,
+                    self.encrypt_opt(input.username.as_deref())?,
+                    self.encrypt_opt(input.password.as_deref())?,
+                    self.encrypt_opt(input.cookies_json.as_deref())?,
+                    input.cookie_issued_at, input.cookie_expires_at, now,
+                ],
+            )
+            .with_context(|| format!("新增账户 {} 失败", input.name))?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    #[allow(dead_code)] // Task 8 应用接线接入后使用
+    pub fn update_account(&self, id: i64, input: &AccountInput) -> Result<()> {
+        let n = self
+            .conn
+            .execute(
+                "UPDATE accounts SET name=?1, api_user=?2, username_enc=?3, password_enc=?4,
+                                 cookies_enc=?5, cookie_issued_at=?6, cookie_expires_at=?7,
+                                 updated_at=?8
+             WHERE id=?9",
+                rusqlite::params![
+                    input.name, input.api_user,
+                    self.encrypt_opt(input.username.as_deref())?,
+                    self.encrypt_opt(input.password.as_deref())?,
+                    self.encrypt_opt(input.cookies_json.as_deref())?,
+                    input.cookie_issued_at, input.cookie_expires_at, now_iso(), id,
+                ],
+            )
+            .with_context(|| format!("更新账户失败 id={id}"))?;
+        anyhow::ensure!(n == 1, "更新账户失败:id={id} 不存在");
+        Ok(())
+    }
+
+    #[allow(dead_code)] // Task 8 应用接线接入后使用
+    pub fn delete_account(&self, id: i64) -> Result<()> {
+        self.conn
+            .execute("DELETE FROM accounts WHERE id=?1", [id])
+            .context("删除账户失败")?;
+        Ok(())
+    }
+
+    #[allow(dead_code)] // Task 8 应用接线接入后使用
+    pub fn get_account(&self, id: i64) -> Result<Option<Account>> {
+        let accounts = self.query_accounts("WHERE id=?1", rusqlite::params![id])?;
+        Ok(accounts.into_iter().next())
+    }
+
+    #[allow(dead_code)] // Task 8 应用接线接入后使用
+    pub fn list_accounts(&self, site_id: i64) -> Result<Vec<Account>> {
+        self.query_accounts("WHERE site_id=?1 ORDER BY id", rusqlite::params![site_id])
+    }
+
+    #[allow(dead_code)] // Task 8 应用接线接入后使用
+    pub fn list_all_accounts(&self) -> Result<Vec<Account>> {
+        self.query_accounts("ORDER BY site_id, id", rusqlite::params![])
+    }
+
+    #[allow(dead_code)] // Task 8 应用接线接入后使用
+    pub fn count_accounts(&self, site_id: i64) -> Result<i64> {
+        self.conn
+            .query_row(
+                "SELECT COUNT(*) FROM accounts WHERE site_id=?1",
+                [site_id],
+                |r| r.get(0),
+            )
+            .context("统计账户数失败")
+    }
+
+    /// 账户查询的唯一 SELECT 来源(列清单仅出现于此),行内同时完成敏感列解密。
+    #[allow(dead_code)] // Task 8 应用接线接入后使用
+    fn query_accounts(&self, suffix: &str, params: impl rusqlite::Params) -> Result<Vec<Account>> {
+        let sql = format!(
+            "SELECT id, site_id, name, api_user, username_enc, password_enc, cookies_enc,
+                    cookie_issued_at, cookie_expires_at, created_at, updated_at
+             FROM accounts {suffix}"
+        );
+        let mut stmt = self.conn.prepare(&sql).context("查询账户失败")?;
+        let mut rows = stmt.query(params).context("查询账户失败")?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next().context("查询账户失败")? {
+            out.push(Account {
+                id: row.get(0)?,
+                site_id: row.get(1)?,
+                name: row.get(2)?,
+                api_user: row.get(3)?,
+                username: self.decrypt_opt(row.get::<_, Option<Vec<u8>>>(4)?)?,
+                password: self.decrypt_opt(row.get::<_, Option<Vec<u8>>>(5)?)?,
+                cookies_json: self.decrypt_opt(row.get::<_, Option<Vec<u8>>>(6)?)?,
+                cookie_issued_at: row.get(7)?,
+                cookie_expires_at: row.get(8)?,
+                created_at: row.get(9)?,
+                updated_at: row.get(10)?,
+            });
+        }
+        Ok(out)
+    }
+
+    /// 空串与 None 一律存 NULL,避免空值产生无意义密文。
+    #[allow(dead_code)] // Task 8 应用接线接入后使用
+    fn encrypt_opt(&self, value: Option<&str>) -> Result<Option<Vec<u8>>> {
+        match value {
+            Some(v) if !v.is_empty() => Ok(Some(self.crypto.encrypt(v)?)),
+            _ => Ok(None),
+        }
+    }
+
+    #[allow(dead_code)] // Task 8 应用接线接入后使用
+    fn decrypt_opt(&self, blob: Option<Vec<u8>>) -> Result<Option<String>> {
+        match blob {
+            Some(b) => Ok(Some(self.crypto.decrypt(&b)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// 仅测试用:读取账户三个加密列的原始 BLOB。
+    #[cfg(test)]
+    #[allow(clippy::type_complexity)] // 一次性测试辅助,三列元组不值得提类型别名
+    pub(crate) fn raw_account_blobs(
+        &self,
+        id: i64,
+    ) -> (Option<Vec<u8>>, Option<Vec<u8>>, Option<Vec<u8>>) {
+        self.conn
+            .query_row(
+                "SELECT username_enc, password_enc, cookies_enc FROM accounts WHERE id=?1",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap()
+    }
 }
 
 #[cfg(test)]
@@ -485,5 +625,79 @@ mod tests {
         let s = test_storage();
         s.insert_site(&SiteInput::with_defaults("A", "https://a.com")).unwrap();
         assert!(s.insert_site(&SiteInput::with_defaults("A", "https://b.com")).is_err());
+    }
+
+    fn sample_account(site_id: i64, name: &str) -> AccountInput {
+        AccountInput {
+            site_id,
+            name: name.to_string(),
+            api_user: "12345".to_string(),
+            username: Some("alice".to_string()),
+            password: Some("p@ss".to_string()),
+            cookies_json: Some(r#"[{"name":"session","value":"abc","domain":"anyrouter.top","path":"/","expires":-1,"httpOnly":false,"secure":true}]"#.to_string()),
+            cookie_issued_at: Some(now_iso()),
+            cookie_expires_at: None,
+        }
+    }
+
+    #[test]
+    fn account_crud_roundtrip_with_encryption() {
+        let s = test_storage();
+        let site_id = s.insert_site(&SiteInput::with_defaults("A", "https://a.com")).unwrap();
+        let id = s.insert_account(&sample_account(site_id, "用户A")).unwrap();
+
+        let acc = s.get_account(id).unwrap().expect("应能查到");
+        assert_eq!(acc.name, "用户A");
+        assert_eq!(acc.username.as_deref(), Some("alice"));
+        assert_eq!(acc.password.as_deref(), Some("p@ss"));
+        assert!(acc.cookies_json.as_deref().unwrap().contains("session"));
+
+        // 落库的必须是密文:原文不应出现在任何 BLOB 中
+        let (u, p, c) = s.raw_account_blobs(id);
+        for blob in [u, p, c] {
+            let blob = blob.expect("加密列应有值");
+            assert!(!String::from_utf8_lossy(&blob).contains("alice"));
+            assert!(!String::from_utf8_lossy(&blob).contains("p@ss"));
+            assert!(!String::from_utf8_lossy(&blob).contains("session"));
+        }
+
+        // 更新:清空账密、改名
+        let mut input = sample_account(site_id, "用户B");
+        input.username = None;
+        input.password = None;
+        s.update_account(id, &input).unwrap();
+        let acc = s.get_account(id).unwrap().unwrap();
+        assert_eq!(acc.name, "用户B");
+        assert_eq!(acc.username, None);
+
+        // 列表与删除
+        assert_eq!(s.list_accounts(site_id).unwrap().len(), 1);
+        assert_eq!(s.count_accounts(site_id).unwrap(), 1);
+        s.delete_account(id).unwrap();
+        assert!(s.get_account(id).unwrap().is_none());
+    }
+
+    #[test]
+    fn update_missing_account_fails() {
+        let s = test_storage();
+        let err = s.update_account(9999, &sample_account(1, "Ghost")).unwrap_err();
+        assert!(err.to_string().contains("9999"), "错误信息应指明缺失的 id:{err}");
+    }
+
+    #[test]
+    fn deleting_site_cascades_accounts() {
+        let s = test_storage();
+        let site_id = s.insert_site(&SiteInput::with_defaults("A", "https://a.com")).unwrap();
+        s.insert_account(&sample_account(site_id, "用户A")).unwrap();
+        s.delete_site(site_id).unwrap();
+        assert!(s.list_all_accounts().unwrap().is_empty());
+    }
+
+    #[test]
+    fn account_name_unique_within_site() {
+        let s = test_storage();
+        let site_id = s.insert_site(&SiteInput::with_defaults("A", "https://a.com")).unwrap();
+        s.insert_account(&sample_account(site_id, "用户A")).unwrap();
+        assert!(s.insert_account(&sample_account(site_id, "用户A")).is_err());
     }
 }
