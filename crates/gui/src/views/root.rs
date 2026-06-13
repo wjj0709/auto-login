@@ -721,16 +721,12 @@ fn spawn_log_poller(state: Entity<AppState>, _db_path: std::path::PathBuf, cx: &
                 .await;
             let had_entry = cx.update(|cx| {
                 state.update(cx, |st, _| {
-                    let mut had_entry = false;
-                    if let Some(ref rx) = st.log_rx {
-                        while let Ok(entry) = rx.try_recv() {
-                            st.log_entries.push(entry);
-                            had_entry = true;
-                        }
-                    }
-                    let bg_run = st.bg_running.load(Ordering::Relaxed);
-                    if !bg_run && st.running {
-                        st.running = false;
+                    let before_len = st.log_entries.len();
+                    let was_running = st.running;
+                    st.poll_bg_logs();
+                    let mut had_entry = st.log_entries.len() != before_len;
+                    if was_running && !st.running {
+                        // 后台任务刚结束，清理进度并刷新主页统计
                         st.run_progress = None;
                         st.reload_sites();
                         had_entry = true;

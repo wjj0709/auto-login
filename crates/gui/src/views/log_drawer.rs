@@ -6,7 +6,8 @@ use crate::views::root::RootView;
 
 pub fn render(state: Entity<AppState>, cx: &mut Context<RootView>) -> AnyElement {
     let snap = state.read(cx);
-    let entries = snap.log_entries.clone();
+    // 倒序：最新日志显示在顶部，无需手动滚动
+    let entries: Vec<_> = snap.log_entries.iter().rev().cloned().collect();
     let state_clear = state.clone();
     let state_close = state;
 

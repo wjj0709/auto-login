@@ -167,6 +167,12 @@ impl AppState {
                 self.log_entries.push(entry);
             }
         }
+        // 限制日志最大条数（保留最近 500 条）
+        const MAX_LOG_ENTRIES: usize = 500;
+        if self.log_entries.len() > MAX_LOG_ENTRIES {
+            let drop_count = self.log_entries.len() - MAX_LOG_ENTRIES;
+            self.log_entries.drain(0..drop_count);
+        }
         // 更新 running 标志
         if !self.bg_running.load(std::sync::atomic::Ordering::Relaxed) && self.running {
             self.running = false;
