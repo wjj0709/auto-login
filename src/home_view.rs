@@ -1,9 +1,9 @@
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariants};
-use gpui_component::{Sizable, WindowExt};
+use gpui_component::Sizable;
 
-use crate::app_state::{AppState, DeleteTarget};
+use crate::app_state::AppState;
 use crate::theme::{Glass, GlassExt};
 
 /// 主页:统计条 + 站点卡片网格 + 新建站点卡片。
@@ -16,32 +16,16 @@ impl HomeView {
         Self { app_state }
     }
 
-    /// 打开站点表单(Milestone C 替换为真实表单)。
-    fn open_site_form(&self, edit_id: Option<i64>, window: &mut Window, _cx: &mut Context<Self>) {
-        let title = if edit_id.is_some() { "编辑站点" } else { "新建站点" };
-        window.open_dialog(_cx, move |dialog, _window, _cx| {
-            dialog.title(title).w(px(460.0)).child(
-                div()
-                    .py_6()
-                    .text_sm()
-                    .text_color(Glass::text_muted())
-                    .child("站点表单即将上线(Milestone C)"),
-            )
-        });
+    fn open_site_form(&self, edit_id: Option<i64>, window: &mut Window, cx: &mut Context<Self>) {
+        crate::account_modal::open_site_form(&self.app_state, edit_id, window, cx);
     }
 
-    fn open_account_list(&self, site_id: i64, cx: &mut Context<Self>) {
-        self.app_state.update(cx, |state, cx| {
-            state.account_list_modal = Some(site_id);
-            cx.notify();
-        });
+    fn open_account_list(&self, site_id: i64, window: &mut Window, cx: &mut Context<Self>) {
+        crate::account_modal::open_account_list(&self.app_state, site_id, window, cx);
     }
 
-    fn request_delete_site(&self, site_id: i64, cx: &mut Context<Self>) {
-        self.app_state.update(cx, |state, cx| {
-            state.confirm_delete = Some(DeleteTarget::Site(site_id));
-            cx.notify();
-        });
+    fn request_delete_site(&self, site_id: i64, window: &mut Window, cx: &mut Context<Self>) {
+        crate::account_modal::confirm_delete_site(&self.app_state, site_id, window, cx);
     }
 
     /// 统计卡片
@@ -163,8 +147,8 @@ impl HomeView {
                             .outline()
                             .small()
                             .label("查看账户")
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.open_account_list(site_id, cx)
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.open_account_list(site_id, window, cx)
                             })),
                     )
                     .child(
@@ -182,8 +166,8 @@ impl HomeView {
                             .small()
                             .danger()
                             .label("删除")
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.request_delete_site(site_id, cx)
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.request_delete_site(site_id, window, cx)
                             })),
                     ),
             )

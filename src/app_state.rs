@@ -61,16 +61,7 @@ pub struct BalanceInfo {
 pub enum AppView {
     Home,
     /// 账户详情页(account_id)
-    #[allow(dead_code)] // Milestone D 接入导航后构造
     AccountDetail(i64),
-}
-
-/// 删除确认目标
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[allow(dead_code)] // Milestone C 接入删除确认后构造
-pub enum DeleteTarget {
-    Site(i64),
-    Account(i64),
 }
 
 /// 全局应用状态 (GPUI Model)。
@@ -82,7 +73,6 @@ pub struct AppState {
     /// 账户列表(来自 SQLite,敏感字段已解密驻留内存)
     pub accounts: Vec<Account>,
     /// 数据库句柄(界面 CRUD 与后台任务共享)
-    #[allow(dead_code)] // Milestone C 界面 CRUD 接入后使用
     pub db: Arc<Mutex<Storage>>,
 
     /// 各账户签到状态,键为 account_id
@@ -103,12 +93,6 @@ pub struct AppState {
     pub view: AppView,
     /// 底部日志抽屉是否展开
     pub log_drawer_open: bool,
-    /// 账户列表弹窗(站点 id);None 表示未打开
-    #[allow(dead_code)] // Milestone C 账户弹窗接入后使用
-    pub account_list_modal: Option<i64>,
-    /// 删除确认弹窗目标
-    #[allow(dead_code)] // Milestone C 删除确认接入后使用
-    pub confirm_delete: Option<DeleteTarget>,
 }
 
 impl AppState {
@@ -132,8 +116,6 @@ impl AppState {
             fail_count: 0,
             view: AppView::Home,
             log_drawer_open: false,
-            account_list_modal: None,
-            confirm_delete: None,
         }
     }
 
