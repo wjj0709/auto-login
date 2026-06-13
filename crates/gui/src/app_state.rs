@@ -3,8 +3,12 @@
 use std::sync::mpsc;
 use std::sync::{Arc, atomic::AtomicBool};
 
-use anyrouter_core::models::SiteWithStats;
+use gpui::{AppContext, Entity};
+
+use anyrouter_core::models::{Account, Site, SiteWithStats};
 use anyrouter_core::storage::Storage;
+
+use crate::components::text_input::TextInput;
 
 /// 当前主视图
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,6 +50,128 @@ pub enum LogLevel {
     Error,
 }
 
+/// 站点表单的输入框集合（持久化的 TextInput 实体）
+pub struct SiteFormFields {
+    pub editing_id: Option<i64>,
+    pub show_advanced: bool,
+    pub name: Entity<TextInput>,
+    pub domain: Entity<TextInput>,
+    pub login_path: Entity<TextInput>,
+    pub sign_in_path: Entity<TextInput>,
+    pub user_info_path: Entity<TextInput>,
+    pub tokens_path: Entity<TextInput>,
+    pub logs_path: Entity<TextInput>,
+    pub chart_path: Entity<TextInput>,
+    pub api_user_key: Entity<TextInput>,
+}
+
+/// 账户表单的输入框集合
+pub struct AccountFormFields {
+    pub site_id: i64,
+    pub editing_id: Option<i64>,
+    pub name: Entity<TextInput>,
+    pub api_user: Entity<TextInput>,
+    pub cookie: Entity<TextInput>,
+    pub username: Entity<TextInput>,
+    pub password: Entity<TextInput>,
+}
+
+impl SiteFormFields {
+    /// 新建站点：填入 new-api 系站点的默认路径
+    pub fn new_create<C: AppContext>(cx: &mut C) -> Self {
+        Self {
+            editing_id: None,
+            show_advanced: false,
+            name: cx.new(|cx| TextInput::new(cx, "如 AnyRouter", "", false)),
+            domain: cx.new(|cx| TextInput::new(cx, "https://example.com", "", false)),
+            login_path: cx.new(|cx| TextInput::new(cx, "/login", "/login", false)),
+            sign_in_path: cx.new(|cx| {
+                TextInput::new(cx, "留空=自动签到型", "/api/user/sign_in", false)
+            }),
+            user_info_path: cx.new(|cx| TextInput::new(cx, "", "/api/user/self", false)),
+            tokens_path: cx.new(|cx| TextInput::new(cx, "", "/api/token/", false)),
+            logs_path: cx.new(|cx| TextInput::new(cx, "", "/api/log/self", false)),
+            chart_path: cx.new(|cx| TextInput::new(cx, "", "/api/data/self", false)),
+            api_user_key: cx.new(|cx| TextInput::new(cx, "", "new-api-user", false)),
+        }
+    }
+
+    /// 编辑站点：用已有数据回填
+    pub fn new_edit<C: AppContext>(cx: &mut C, site: &Site) -> Self {
+        Self {
+            editing_id: Some(site.id),
+            show_advanced: false,
+            name: cx.new(|cx| TextInput::new(cx, "如 AnyRouter", site.name.clone(), false)),
+            domain: cx.new(|cx| TextInput::new(cx, "https://example.com", site.domain.clone(), false)),
+            login_path: cx.new(|cx| TextInput::new(cx, "/login", site.login_path.clone(), false)),
+            sign_in_path: cx.new(|cx| {
+                TextInput::new(
+                    cx,
+                    "留空=自动签到型",
+                    site.sign_in_path.clone().unwrap_or_default(),
+                    false,
+                )
+            }),
+            user_info_path: cx.new(|cx| TextInput::new(cx, "", site.user_info_path.clone(), false)),
+            tokens_path: cx.new(|cx| TextInput::new(cx, "", site.tokens_path.clone(), false)),
+            logs_path: cx.new(|cx| TextInput::new(cx, "", site.logs_path.clone(), false)),
+            chart_path: cx.new(|cx| TextInput::new(cx, "", site.chart_path.clone(), false)),
+            api_user_key: cx.new(|cx| TextInput::new(cx, "", site.api_user_key.clone(), false)),
+        }
+    }
+}
+
+impl AccountFormFields {
+    /// 新建账户
+    pub fn new_create<C: AppContext>(cx: &mut C, site_id: i64) -> Self {
+        Self {
+            site_id,
+            editing_id: None,
+            name: cx.new(|cx| TextInput::new(cx, "如 主账号", "", false)),
+            api_user: cx.new(|cx| TextInput::new(cx, "new-api-user 请求头值", "", false)),
+            cookie: cx.new(|cx| TextInput::new(cx, "session=...; 或 JSON", "", false)),
+            username: cx.new(|cx| TextInput::new(cx, "可选：登录用户名", "", false)),
+            password: cx.new(|cx| TextInput::new(cx, "可选：登录密码", "", true)),
+        }
+    }
+
+    /// 编辑账户
+    pub fn new_edit<C: AppContext>(cx: &mut C, account: &Account) -> Self {
+        Self {
+            site_id: account.site_id,
+            editing_id: Some(account.id),
+            name: cx.new(|cx| TextInput::new(cx, "如 主账号", account.name.clone(), false)),
+            api_user: cx.new(|cx| {
+                TextInput::new(cx, "new-api-user 请求头值", account.api_user.clone(), false)
+            }),
+            cookie: cx.new(|cx| {
+                TextInput::new(
+                    cx,
+                    "session=...; 或 JSON",
+                    account.cookies.clone().unwrap_or_default(),
+                    false,
+                )
+            }),
+            username: cx.new(|cx| {
+                TextInput::new(
+                    cx,
+                    "可选：登录用户名",
+                    account.username.clone().unwrap_or_default(),
+                    false,
+                )
+            }),
+            password: cx.new(|cx| {
+                TextInput::new(
+                    cx,
+                    "可选：登录密码",
+                    account.password.clone().unwrap_or_default(),
+                    true,
+                )
+            }),
+        }
+    }
+}
+
 /// 全局应用状态
 pub struct AppState {
     pub current_view: ViewKind,
@@ -59,16 +185,13 @@ pub struct AppState {
     /// 详情页当前 Tab 索引
     pub active_tab: usize,
 
-    // ─── 表单缓冲区（站点表单）─────────────────────────────────
-    pub form_site_name: String,
-    pub form_site_domain: String,
+    /// 站点表单输入框（active_modal == SiteForm 时有效）
+    pub site_form: Option<SiteFormFields>,
+    /// 账户表单输入框（active_modal == AccountForm 时有效）
+    pub account_form: Option<AccountFormFields>,
 
-    // ─── 表单缓冲区（账户表单）─────────────────────────────────
-    pub form_account_name: String,
-    pub form_account_api_user: String,
-    pub form_account_cookie: String,
-    pub form_account_username: String,
-    pub form_account_password: String,
+    /// 表单错误提示文本
+    pub form_error: Option<String>,
 
     // ─── Core 层集成 ──────────────────────────────────────────
     /// 数据库 Storage（主线程使用）
@@ -191,13 +314,9 @@ impl Default for AppState {
             running: false,
             run_progress: None,
             active_tab: 0,
-            form_site_name: String::new(),
-            form_site_domain: String::new(),
-            form_account_name: String::new(),
-            form_account_api_user: String::new(),
-            form_account_cookie: String::new(),
-            form_account_username: String::new(),
-            form_account_password: String::new(),
+            site_form: None,
+            account_form: None,
+            form_error: None,
             storage: None,
             log_rx: None,
             bg_running: Arc::new(AtomicBool::new(false)),

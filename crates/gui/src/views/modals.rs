@@ -13,10 +13,8 @@ pub fn render(state: Entity<AppState>, cx: &mut Context<RootView>) -> AnyElement
     let inner = match &modal_kind {
         ModalKind::AccountList(site_id) => render_account_list(*site_id, state.clone(), cx),
         ModalKind::ConfirmDelete(target) => render_confirm_delete(target.clone(), state.clone()),
-        ModalKind::SiteForm(id) => render_site_form_placeholder(*id, state.clone()),
-        ModalKind::AccountForm { site_id, account_id } => {
-            render_account_form_placeholder(*site_id, *account_id, state.clone())
-        }
+        ModalKind::SiteForm(_) => render_site_form(state.clone(), cx),
+        ModalKind::AccountForm { .. } => render_account_form(state.clone(), cx),
     };
 
     let state_close = state;
@@ -99,6 +97,7 @@ fn render_account_list(
         };
 
         let state_detail = state.clone();
+        let state_edit = state.clone();
         let state_delete = state.clone();
         let acc_name_for_delete = acc_name.clone();
 
@@ -155,6 +154,33 @@ fn render_account_list(
                         )
                         .child(
                             div()
+                                .id(("acc-edit", acc_id as usize))
+                                .text_color(theme::text_weakest())
+                                .cursor_pointer()
+                                .hover(|this| this.text_color(theme::text_secondary()))
+                                .child("✎ 编辑")
+                                .on_click(move |_, _w, cx| {
+                                    state_edit.update(cx, |st, cx| {
+                                        st.form_error = None;
+                                        if let Some(ref storage) = st.storage {
+                                            if let Ok(Some(acc)) = storage.get_account(acc_id) {
+                                                st.account_form = Some(
+                                                    crate::app_state::AccountFormFields::new_edit(
+                                                        cx, &acc,
+                                                    ),
+                                                );
+                                                st.active_modal = Some(ModalKind::AccountForm {
+                                                    site_id: acc.site_id,
+                                                    account_id: Some(acc_id),
+                                                });
+                                            }
+                                        }
+                                        cx.notify();
+                                    });
+                                }),
+                        )
+                        .child(
+                            div()
                                 .id(("acc-delete", acc_id as usize))
                                 .text_color(theme::text_weakest())
                                 .cursor_pointer()
@@ -175,11 +201,28 @@ fn render_account_list(
     }
 
     let state_close = state.clone();
-    let state_checkin = state;
+    let state_checkin = state.clone();
+    let state_add = state;
     panel(
         format!("{} · 账户管理", site_name),
         list.into_any_element(),
         vec![
+            PanelButton {
+                label: "+ 新增账户".into(),
+                danger: false,
+                on_click: Box::new(move |cx| {
+                    state_add.update(cx, |st, cx| {
+                        st.form_error = None;
+                        st.account_form =
+                            Some(crate::app_state::AccountFormFields::new_create(cx, site_id));
+                        st.active_modal = Some(ModalKind::AccountForm {
+                            site_id,
+                            account_id: None,
+                        });
+                        cx.notify();
+                    });
+                }),
+            },
             PanelButton {
                 label: "⚡ 签到本站点".into(),
                 danger: false,
@@ -293,100 +336,355 @@ fn render_confirm_delete(target: DeleteTarget, state: Entity<AppState>) -> AnyEl
 }
 
 // ============================================================================
-// 站点表单弹窗（占位，输入框待 GPUI TextField 支持后实现）
+// 站点表单弹窗（真实文本输入）
 // ============================================================================
-fn render_site_form_placeholder(id: Option<i64>, state: Entity<AppState>) -> AnyElement {
-    let title = if id.is_some() {
+fn render_site_form(state: Entity<AppState>, cx: &mut Context<RootView>) -> AnyElement {
+    let snap = state.read(cx);
+    let Some(form) = snap.site_form.as_ref() else {
+        return div().into_any_element();
+    };
+    let title = if form.editing_id.is_some() {
         "编辑站点".to_string()
     } else {
         "新建站点".to_string()
     };
+    let show_advanced = form.show_advanced;
+    let form_error = snap.form_error.clone();
 
-    let state_close = state;
-    panel(
-        title,
+    // 克隆输入框句柄（用于渲染与保存闭包）
+    let name = form.name.clone();
+    let domain = form.domain.clone();
+    let login_path = form.login_path.clone();
+    let sign_in_path = form.sign_in_path.clone();
+    let user_info_path = form.user_info_path.clone();
+    let tokens_path = form.tokens_path.clone();
+    let logs_path = form.logs_path.clone();
+    let chart_path = form.chart_path.clone();
+    let api_user_key = form.api_user_key.clone();
+
+    let mut body = div()
+        .flex()
+        .flex_col()
+        .gap(px(8.0))
+        .child(field_row("站点名称", true, name.clone()))
+        .child(field_row("域名（http:// 或 https://）", true, domain.clone()));
+
+    // 高级设置折叠区
+    let state_toggle = state.clone();
+    body = body.child(
         div()
-            .flex()
-            .flex_col()
-            .gap(px(8.0))
-            .text_color(theme::text_secondary())
-            .text_size(px(11.0))
-            .child("当前版本暂未支持图形化文本输入，可通过以下方式管理站点：")
-            .child(
-                div()
-                    .pl(px(12.0))
-                    .text_color(theme::text_weakest())
-                    .child("• 修改 .env 中的 PROVIDERS 环境变量"),
-            )
-            .child(
-                div()
-                    .pl(px(12.0))
-                    .text_color(theme::text_weakest())
-                    .child("• 直接编辑 SQLite 数据库（%APPDATA%/anyrouter-checkin/data.db）"),
-            )
-            .child(
-                div()
-                    .pl(px(12.0))
-                    .text_color(theme::text_weakest())
-                    .child("• 后续版本将提供完整文本输入界面"),
-            )
-            .into_any_element(),
-        vec![PanelButton {
-            label: "我知道了".into(),
-            danger: false,
-            on_click: Box::new(move |cx| {
-                state_close.update(cx, |st, cx| {
-                    st.active_modal = None;
+            .id("toggle-advanced")
+            .text_size(px(10.0))
+            .text_color(theme::text_muted())
+            .cursor_pointer()
+            .hover(|this| this.text_color(theme::accent_blue()))
+            .child(if show_advanced {
+                "▾ 高级设置"
+            } else {
+                "▸ 高级设置（路径配置）"
+            })
+            .on_click(move |_, _w, cx| {
+                state_toggle.update(cx, |st, cx| {
+                    if let Some(f) = st.site_form.as_mut() {
+                        f.show_advanced = !f.show_advanced;
+                    }
                     cx.notify();
                 });
             }),
-        }],
-        px(420.0),
+    );
+
+    if show_advanced {
+        body = body
+            .child(field_row("登录页路径", false, login_path.clone()))
+            .child(field_row("签到接口（留空=自动签到型）", false, sign_in_path.clone()))
+            .child(field_row("用户信息接口", false, user_info_path.clone()))
+            .child(field_row("密钥列表接口", false, tokens_path.clone()))
+            .child(field_row("使用日志接口", false, logs_path.clone()))
+            .child(field_row("图表数据接口", false, chart_path.clone()))
+            .child(field_row("API 用户请求头名", false, api_user_key.clone()));
+    }
+
+    if let Some(err) = form_error {
+        body = body.child(
+            div()
+                .text_size(px(10.0))
+                .text_color(theme::error_red())
+                .child(err),
+        );
+    }
+
+    let state_cancel = state.clone();
+    let state_save = state;
+
+    panel(
+        title,
+        body.into_any_element(),
+        vec![
+            PanelButton {
+                label: "取消".into(),
+                danger: false,
+                on_click: Box::new(move |cx| {
+                    state_cancel.update(cx, |st, cx| {
+                        st.active_modal = None;
+                        st.site_form = None;
+                        st.form_error = None;
+                        cx.notify();
+                    });
+                }),
+            },
+            PanelButton {
+                label: "保存".into(),
+                danger: false,
+                on_click: Box::new(move |cx| {
+                    // 先读取所有输入框文本（owned），再进入 update 避免借用冲突
+                    let name_v = name.read(cx).text().trim().to_string();
+                    let domain_v = domain.read(cx).text().trim().to_string();
+                    let login_v = login_path.read(cx).text().trim().to_string();
+                    let sign_in_v = sign_in_path.read(cx).text().trim().to_string();
+                    let user_info_v = user_info_path.read(cx).text().trim().to_string();
+                    let tokens_v = tokens_path.read(cx).text().trim().to_string();
+                    let logs_v = logs_path.read(cx).text().trim().to_string();
+                    let chart_v = chart_path.read(cx).text().trim().to_string();
+                    let api_key_v = api_user_key.read(cx).text().trim().to_string();
+
+                    state_save.update(cx, |st, cx| {
+                        // 校验
+                        if name_v.is_empty() || domain_v.is_empty() {
+                            st.form_error = Some("站点名称和域名为必填项".into());
+                            cx.notify();
+                            return;
+                        }
+                        if !(domain_v.starts_with("http://") || domain_v.starts_with("https://")) {
+                            st.form_error = Some("域名必须以 http:// 或 https:// 开头".into());
+                            cx.notify();
+                            return;
+                        }
+
+                        let input = anyrouter_core::models::SiteInput {
+                            name: name_v.clone(),
+                            domain: domain_v,
+                            login_path: if login_v.is_empty() { "/login".into() } else { login_v },
+                            sign_in_path: if sign_in_v.is_empty() { None } else { Some(sign_in_v) },
+                            user_info_path: if user_info_v.is_empty() {
+                                "/api/user/self".into()
+                            } else {
+                                user_info_v
+                            },
+                            tokens_path: if tokens_v.is_empty() { "/api/token/".into() } else { tokens_v },
+                            logs_path: if logs_v.is_empty() { "/api/log/self".into() } else { logs_v },
+                            chart_path: if chart_v.is_empty() { "/api/data/self".into() } else { chart_v },
+                            api_user_key: if api_key_v.is_empty() {
+                                "new-api-user".into()
+                            } else {
+                                api_key_v
+                            },
+                        };
+
+                        let editing_id = st.site_form.as_ref().and_then(|f| f.editing_id);
+                        let now = chrono::Local::now().format("%H:%M:%S").to_string();
+                        let result = if let Some(ref storage) = st.storage {
+                            match editing_id {
+                                Some(id) => storage.update_site(id, &input).map(|_| {
+                                    format!("已更新站点「{}」", name_v)
+                                }),
+                                None => storage
+                                    .insert_site(&input)
+                                    .map(|_| format!("已新建站点「{}」", name_v)),
+                            }
+                        } else {
+                            Err(anyhow::anyhow!("数据库未初始化"))
+                        };
+
+                        match result {
+                            Ok(msg) => {
+                                st.log_entries.push(LogEntry {
+                                    timestamp: now,
+                                    level: LogLevel::Success,
+                                    message: msg,
+                                });
+                                st.active_modal = None;
+                                st.site_form = None;
+                                st.form_error = None;
+                                st.reload_sites();
+                            }
+                            Err(e) => {
+                                st.form_error = Some(format!("保存失败: {}", e));
+                            }
+                        }
+                        cx.notify();
+                    });
+                }),
+            },
+        ],
+        px(440.0),
     )
 }
 
 // ============================================================================
-// 账户表单弹窗（占位）
+// 账户表单弹窗（真实文本输入）
 // ============================================================================
-fn render_account_form_placeholder(
-    _site_id: i64,
-    account_id: Option<i64>,
-    state: Entity<AppState>,
-) -> AnyElement {
-    let title = if account_id.is_some() {
+fn render_account_form(state: Entity<AppState>, cx: &mut Context<RootView>) -> AnyElement {
+    let snap = state.read(cx);
+    let Some(form) = snap.account_form.as_ref() else {
+        return div().into_any_element();
+    };
+    let title = if form.editing_id.is_some() {
         "编辑账户".to_string()
     } else {
         "新增账户".to_string()
     };
+    let form_error = snap.form_error.clone();
 
-    let state_close = state;
+    let name = form.name.clone();
+    let api_user = form.api_user.clone();
+    let cookie = form.cookie.clone();
+    let username = form.username.clone();
+    let password = form.password.clone();
+
+    let mut body = div()
+        .flex()
+        .flex_col()
+        .gap(px(8.0))
+        .child(field_row("账户名称", true, name.clone()))
+        .child(field_row("API 用户标识（new-api-user 值）", true, api_user.clone()))
+        .child(
+            div()
+                .text_size(px(10.0))
+                .text_color(theme::text_weakest())
+                .child("—— 凭据（两种方式至少填一种）——"),
+        )
+        .child(field_row("方式一：Cookie", false, cookie.clone()))
+        .child(field_row("方式二：登录用户名", false, username.clone()))
+        .child(field_row("方式二：登录密码", false, password.clone()));
+
+    if let Some(err) = form_error {
+        body = body.child(
+            div()
+                .text_size(px(10.0))
+                .text_color(theme::error_red())
+                .child(err),
+        );
+    }
+
+    let state_cancel = state.clone();
+    let state_save = state;
+
     panel(
         title,
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(8.0))
-            .text_color(theme::text_secondary())
-            .text_size(px(11.0))
-            .child("账户管理建议通过 .env 中的 ANYROUTER_ACCOUNTS 完成。")
-            .child(
-                div()
-                    .text_color(theme::text_weakest())
-                    .child("修改后重启 GUI 会自动同步到 SQLite。"),
-            )
-            .into_any_element(),
-        vec![PanelButton {
-            label: "我知道了".into(),
-            danger: false,
-            on_click: Box::new(move |cx| {
-                state_close.update(cx, |st, cx| {
-                    st.active_modal = None;
-                    cx.notify();
-                });
-            }),
-        }],
-        px(420.0),
+        body.into_any_element(),
+        vec![
+            PanelButton {
+                label: "取消".into(),
+                danger: false,
+                on_click: Box::new(move |cx| {
+                    state_cancel.update(cx, |st, cx| {
+                        st.active_modal = None;
+                        st.account_form = None;
+                        st.form_error = None;
+                        cx.notify();
+                    });
+                }),
+            },
+            PanelButton {
+                label: "保存".into(),
+                danger: false,
+                on_click: Box::new(move |cx| {
+                    let name_v = name.read(cx).text().trim().to_string();
+                    let api_user_v = api_user.read(cx).text().trim().to_string();
+                    let cookie_v = cookie.read(cx).text().trim().to_string();
+                    let username_v = username.read(cx).text().trim().to_string();
+                    let password_v = password.read(cx).text().trim().to_string();
+
+                    state_save.update(cx, |st, cx| {
+                        if name_v.is_empty() || api_user_v.is_empty() {
+                            st.form_error = Some("账户名称和 API 用户标识为必填项".into());
+                            cx.notify();
+                            return;
+                        }
+                        if cookie_v.is_empty() && (username_v.is_empty() || password_v.is_empty()) {
+                            st.form_error =
+                                Some("请至少填写 Cookie，或同时填写用户名和密码".into());
+                            cx.notify();
+                            return;
+                        }
+
+                        let (site_id, editing_id) = st
+                            .account_form
+                            .as_ref()
+                            .map(|f| (f.site_id, f.editing_id))
+                            .unwrap_or((0, None));
+
+                        let input = anyrouter_core::models::AccountInput {
+                            site_id,
+                            name: name_v.clone(),
+                            api_user: api_user_v,
+                            username: if username_v.is_empty() { None } else { Some(username_v) },
+                            password: if password_v.is_empty() { None } else { Some(password_v) },
+                            cookies: if cookie_v.is_empty() { None } else { Some(cookie_v) },
+                        };
+
+                        let now = chrono::Local::now().format("%H:%M:%S").to_string();
+                        let result = if let Some(ref storage) = st.storage {
+                            match editing_id {
+                                Some(id) => storage
+                                    .update_account(id, &input)
+                                    .map(|_| format!("已更新账户「{}」", name_v)),
+                                None => storage
+                                    .insert_account(&input)
+                                    .map(|_| format!("已新增账户「{}」", name_v)),
+                            }
+                        } else {
+                            Err(anyhow::anyhow!("数据库未初始化"))
+                        };
+
+                        match result {
+                            Ok(msg) => {
+                                st.log_entries.push(LogEntry {
+                                    timestamp: now,
+                                    level: LogLevel::Success,
+                                    message: msg,
+                                });
+                                st.active_modal = None;
+                                st.account_form = None;
+                                st.form_error = None;
+                                st.reload_sites();
+                            }
+                            Err(e) => {
+                                st.form_error = Some(format!("保存失败: {}", e));
+                            }
+                        }
+                        cx.notify();
+                    });
+                }),
+            },
+        ],
+        px(440.0),
     )
+}
+
+/// 渲染一个带标签的输入框行
+fn field_row(label: &str, required: bool, input: Entity<crate::components::text_input::TextInput>) -> AnyElement {
+    let label_text = if required {
+        format!("{} *", label)
+    } else {
+        label.to_string()
+    };
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(3.0))
+        .child(
+            div()
+                .text_size(px(10.0))
+                .text_color(if required {
+                    theme::text_secondary()
+                } else {
+                    theme::text_muted()
+                })
+                .child(label_text),
+        )
+        .child(input)
+        .into_any_element()
 }
 
 // ============================================================================

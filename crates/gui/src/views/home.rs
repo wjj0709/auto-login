@@ -212,7 +212,14 @@ fn render_site_card(
                         .child("✎ 编辑")
                         .on_click(move |_, _w, cx| {
                             state_for_edit.update(cx, |st, cx| {
-                                st.active_modal = Some(ModalKind::SiteForm(Some(site_id)));
+                                st.form_error = None;
+                                if let Some(ref storage) = st.storage {
+                                    if let Ok(Some(site)) = storage.get_site(site_id) {
+                                        st.site_form =
+                                            Some(crate::app_state::SiteFormFields::new_edit(cx, &site));
+                                        st.active_modal = Some(ModalKind::SiteForm(Some(site_id)));
+                                    }
+                                }
                                 cx.notify();
                             });
                         }),
@@ -265,8 +272,8 @@ fn render_new_site_card(state: Entity<AppState>) -> impl IntoElement {
         .child("+ 新建站点")
         .on_click(move |_, _w, cx| {
             state.update(cx, |st, cx| {
-                st.form_site_name.clear();
-                st.form_site_domain.clear();
+                st.form_error = None;
+                st.site_form = Some(crate::app_state::SiteFormFields::new_create(cx));
                 st.active_modal = Some(ModalKind::SiteForm(None));
                 cx.notify();
             });
