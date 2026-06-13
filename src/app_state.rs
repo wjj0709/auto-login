@@ -91,8 +91,6 @@ pub struct AppState {
 
     /// 当前整页视图
     pub view: AppView,
-    /// 底部日志抽屉是否展开
-    pub log_drawer_open: bool,
 }
 
 impl AppState {
@@ -115,7 +113,6 @@ impl AppState {
             success_count: 0,
             fail_count: 0,
             view: AppView::Home,
-            log_drawer_open: false,
         }
     }
 

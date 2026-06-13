@@ -1,10 +1,9 @@
 use std::time::Duration;
 
-use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::Disableable;
-use gpui_component::{Root, TitleBar};
+use gpui_component::{Placement, Root, TitleBar, WindowExt};
 
 use crate::account_detail::AccountDetail;
 use crate::app_state::{AppState, AppView};
@@ -35,11 +34,20 @@ impl RootView {
         service::run_checkin(weak, CheckinScope::All, cx);
     }
 
-    fn toggle_drawer(&mut self, cx: &mut Context<Self>) {
-        self.app_state.update(cx, |state, cx| {
-            state.log_drawer_open = !state.log_drawer_open;
-            cx.notify();
-        });
+    fn toggle_drawer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if window.has_active_sheet(cx) {
+            window.close_sheet(cx);
+        } else {
+            let log_panel = self.log_panel.clone();
+            window.open_sheet_at(Placement::Bottom, cx, move |sheet, _window, _cx| {
+                sheet
+                    .title("运行日志")
+                    .size(px(300.0))
+                    .overlay(false)
+                    .resizable(false)
+                    .child(log_panel.clone())
+            });
+        }
     }
 
     /// 顶部状态指示点:运行中为脉冲呼吸的橙色点,空闲为静态绿色点。
@@ -163,23 +171,18 @@ impl RootView {
                 Button::new("toggle-logs")
                     .ghost()
                     .label(if drawer_open { "▾ 日志" } else { "▤ 日志" })
-                    .on_click(cx.listener(|this, _, _, cx| this.toggle_drawer(cx))),
+                    .on_click(cx.listener(|this, _, window, cx| this.toggle_drawer(window, cx))),
             )
     }
 }
 
 impl Render for RootView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let (is_running, success, fail, drawer_open, view) = {
+        let (is_running, success, fail, view) = {
             let state = self.app_state.read(cx);
-            (
-                state.is_running,
-                state.success_count,
-                state.fail_count,
-                state.log_drawer_open,
-                state.view,
-            )
+            (state.is_running, state.success_count, state.fail_count, state.view)
         };
+        let drawer_open = window.has_active_sheet(cx);
 
         let toolbar = matches!(view, AppView::Home)
             .then(|| self.render_toolbar(is_running, cx).into_any_element());
@@ -205,18 +208,6 @@ impl Render for RootView {
                     .p_6()
                     .child(content),
             )
-            // 日志抽屉(Milestone E 改为底部 Sheet;此处先用内联面板占位)
-            .when(drawer_open, |this| {
-                this.child(
-                    div()
-                        .h(px(240.0))
-                        .border_t_1()
-                        .border_color(Glass::border_bright())
-                        .bg(Glass::terminal())
-                        .p_3()
-                        .child(self.log_panel.clone()),
-                )
-            })
             .child(self.render_bottom_bar(is_running, success, fail, drawer_open, cx))
             // 通知 / 弹窗 / 抽屉层(必须由根视图渲染,否则 Dialog/Sheet 不显示)
             .children(Root::render_notification_layer(window, cx))

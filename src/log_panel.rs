@@ -125,19 +125,19 @@ impl Render for LogPanel {
                     .child(
                         div().text_lg().font_weight(FontWeight::BOLD)
                             .text_color(Glass::text())
-                            .child("Real-time Logs")
+                            .child("实时日志")
                     )
                     .child(
                         div().flex().items_center().gap_2()
                             .child(
                                 div().text_xs().text_color(Glass::text_muted())
-                                    .child(format!("{} entries", log_count))
+                                    .child(format!("{} 条", log_count))
                             )
                             .child(
                                 Button::new("clear-logs")
                                     .small()
                                     .ghost()
-                                    .label("Clear")
+                                    .label("清空")
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.app_state.update(cx, |state, cx| {
                                             state.clear_logs();
@@ -150,12 +150,12 @@ impl Render for LogPanel {
             // 过滤按钮
             .child(
                 div().flex().gap_1()
-                    .child(self.render_filter_button("All", None, cx))
-                    .child(self.render_filter_button("Info", Some(LogLevel::Info), cx))
-                    .child(self.render_filter_button("Success", Some(LogLevel::Success), cx))
-                    .child(self.render_filter_button("Warn", Some(LogLevel::Warn), cx))
-                    .child(self.render_filter_button("Error", Some(LogLevel::Error), cx))
-                    .child(self.render_filter_button("Debug", Some(LogLevel::Debug), cx))
+                    .child(self.render_filter_button("全部", None, cx))
+                    .child(self.render_filter_button("信息", Some(LogLevel::Info), cx))
+                    .child(self.render_filter_button("成功", Some(LogLevel::Success), cx))
+                    .child(self.render_filter_button("警告", Some(LogLevel::Warn), cx))
+                    .child(self.render_filter_button("错误", Some(LogLevel::Error), cx))
+                    .child(self.render_filter_button("调试", Some(LogLevel::Debug), cx))
             )
             // 日志终端
             .child(
@@ -173,9 +173,9 @@ impl Render for LogPanel {
                         if log_elements.is_empty() {
                             div().flex().flex_col().items_center().justify_center().gap_2().py_10().size_full()
                                 .child(div().text_xl().text_color(Glass::text_muted().opacity(0.4)).child("›_"))
-                                .child(div().text_sm().text_color(Glass::text_muted()).child("No log entries yet"))
+                                .child(div().text_sm().text_color(Glass::text_muted()).child("暂无日志"))
                                 .child(div().text_xs().text_color(Glass::text_muted().opacity(0.7))
-                                    .child("Click 'Check-in All' to start"))
+                                    .child("点击「一键签到全部」开始"))
                                 .into_any_element()
                         } else {
                             div().flex().flex_col()
