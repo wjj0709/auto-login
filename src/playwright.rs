@@ -70,9 +70,11 @@ fn build_account(account: &AccountConfig, provider: &ProviderConfig, index: usiz
         api_user_key: provider.api_user_key.clone(),
         api_user: account.api_user.clone(),
         cookies: account.cookies.clone(),
-        username: account_field(&account.cookies, "_username")
+        username: account._username.clone()
+            .or_else(|| account_field(&account.cookies, "_username"))
             .or_else(|| std::env::var(format!("ANYROUTER_USERNAME_{}", index + 1)).ok()),
-        password: account_field(&account.cookies, "_password")
+        password: account._password.clone()
+            .or_else(|| account_field(&account.cookies, "_password"))
             .or_else(|| std::env::var(format!("ANYROUTER_PASSWORD_{}", index + 1)).ok()),
     }
 }
@@ -111,7 +113,13 @@ fn locate_script() -> PathBuf {
 }
 
 fn locate_python() -> String {
-    std::env::var("PYTHON_BIN").unwrap_or_else(|_| "python3".to_string())
+    std::env::var("PYTHON_BIN").unwrap_or_else(|_| {
+        if cfg!(windows) {
+            "python".to_string()
+        } else {
+            "python3".to_string()
+        }
+    })
 }
 
 fn headless_flag() -> bool {

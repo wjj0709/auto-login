@@ -123,14 +123,20 @@ impl AppConfig {
 /// 账号配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccountConfig {
+    #[serde(default = "default_cookies")]
     pub cookies: serde_json::Value,
     pub api_user: String,
     #[serde(default = "default_provider")]
     pub provider: String,
     pub name: Option<String>,
+    #[serde(default)]
+    pub _username: Option<String>,
+    #[serde(default)]
+    pub _password: Option<String>,
 }
 
 fn default_provider() -> String { "anyrouter".to_string() }
+fn default_cookies() -> serde_json::Value { serde_json::Value::Object(serde_json::Map::new()) }
 
 impl AccountConfig {
     pub fn get_display_name(&self, index: usize) -> String {
