@@ -855,7 +855,7 @@ Expected: FAIL,`no method named insert_account`
 - [ ] **Step 4: 运行测试确认通过**
 
 Run: `cargo test storage 2>&1 | tail -5`
-Expected: `test result: ok. 9 passed`
+Expected: storage 测试全绿(本任务新增 3 个测试;绝对总数随修复轮次新增的测试浮动,以全绿为准)
 
 - [ ] **Step 5: Commit**
 
@@ -1000,7 +1000,7 @@ pub fn cookie_entries_to_map(entries_json: &str) -> serde_json::Map<String, serd
 - [ ] **Step 4: 运行测试确认通过**
 
 Run: `cargo test storage 2>&1 | tail -5`
-Expected: `test result: ok. 13 passed`
+Expected: storage 测试全绿(本任务新增 4 个测试)
 
 - [ ] **Step 5: Commit**
 
@@ -1207,7 +1207,7 @@ pub struct ImportReport {
 - [ ] **Step 4: 运行测试确认通过**
 
 Run: `cargo test storage 2>&1 | tail -5`
-Expected: `test result: ok. 15 passed`
+Expected: storage 测试全绿(本任务新增 2 个测试)
 
 - [ ] **Step 5: Commit**
 
@@ -1320,7 +1320,7 @@ Expected: FAIL,`no method named load_providers_for_ui`
 - [ ] **Step 4: 运行测试确认通过**
 
 Run: `cargo test storage 2>&1 | tail -5`
-Expected: `test result: ok. 16 passed`
+Expected: storage 测试全绿(本任务新增 1 个测试)
 
 - [ ] **Step 5: 改 `src/app_state.rs` —— AppState 持有 providers 与数据库句柄**
 
@@ -1457,7 +1457,7 @@ fn main() {
 - [ ] **Step 9: 全量编译与测试**
 
 Run: `cargo test 2>&1 | tail -8`
-Expected: 全部通过(crypto 4 + storage 16 + checkin 2 = `22 passed` 上下),无编译错误
+Expected: 全部通过(crypto + storage + checkin 全套测试),无编译错误
 
 Run: `cargo check 2>&1 | tail -3`
 Expected: `Finished`,无 warning 新增(若有 unused 警告按提示清理)
