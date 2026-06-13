@@ -5,7 +5,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use chrono::{Local, SecondsFormat};
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 
 use crate::crypto::Crypto;
 
@@ -109,6 +109,10 @@ pub struct Storage {
 pub fn now_iso() -> String {
     Local::now().to_rfc3339_opts(SecondsFormat::Secs, false)
 }
+
+/// sites 表查询列清单(各查询共用,列顺序必须与 `row_to_site` 的取列下标一致)。
+const SITE_COLS: &str = "id, name, domain, login_path, sign_in_path, user_info_path, \
+                         tokens_path, logs_path, chart_path, api_user_key, created_at, updated_at";
 
 impl Storage {
     /// 打开默认位置的数据库:%LOCALAPPDATA%/anyrouter-checkin/data.db
@@ -234,85 +238,91 @@ impl Storage {
         Ok(())
     }
 
-    #[allow(dead_code)] // Task 8 应用接线接入后使用
+    #[allow(dead_code)] // Task 7/8 接入后使用
     pub fn insert_site(&self, input: &SiteInput) -> Result<i64> {
         let now = now_iso();
-        self.conn.execute(
-            "INSERT INTO sites(name, domain, login_path, sign_in_path, user_info_path,
+        self.conn
+            .execute(
+                "INSERT INTO sites(name, domain, login_path, sign_in_path, user_info_path,
                                tokens_path, logs_path, chart_path, api_user_key,
                                created_at, updated_at)
              VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?10)",
-            rusqlite::params![
-                input.name, input.domain, input.login_path, input.sign_in_path,
-                input.user_info_path, input.tokens_path, input.logs_path,
-                input.chart_path, input.api_user_key, now,
-            ],
-        )?;
+                rusqlite::params![
+                    input.name, input.domain, input.login_path, input.sign_in_path,
+                    input.user_info_path, input.tokens_path, input.logs_path,
+                    input.chart_path, input.api_user_key, now,
+                ],
+            )
+            .with_context(|| format!("新增站点 {} 失败", input.name))?;
         Ok(self.conn.last_insert_rowid())
     }
 
     #[allow(dead_code)] // Task 8 应用接线接入后使用
     pub fn update_site(&self, id: i64, input: &SiteInput) -> Result<()> {
-        self.conn.execute(
-            "UPDATE sites SET name=?1, domain=?2, login_path=?3, sign_in_path=?4,
+        let n = self
+            .conn
+            .execute(
+                "UPDATE sites SET name=?1, domain=?2, login_path=?3, sign_in_path=?4,
                               user_info_path=?5, tokens_path=?6, logs_path=?7,
                               chart_path=?8, api_user_key=?9, updated_at=?10
              WHERE id=?11",
-            rusqlite::params![
-                input.name, input.domain, input.login_path, input.sign_in_path,
-                input.user_info_path, input.tokens_path, input.logs_path,
-                input.chart_path, input.api_user_key, now_iso(), id,
-            ],
-        )?;
+                rusqlite::params![
+                    input.name, input.domain, input.login_path, input.sign_in_path,
+                    input.user_info_path, input.tokens_path, input.logs_path,
+                    input.chart_path, input.api_user_key, now_iso(), id,
+                ],
+            )
+            .with_context(|| format!("更新站点失败 id={id}"))?;
+        anyhow::ensure!(n == 1, "更新站点失败:id={id} 不存在");
         Ok(())
     }
 
     #[allow(dead_code)] // Task 8 应用接线接入后使用
     pub fn delete_site(&self, id: i64) -> Result<()> {
-        self.conn.execute("DELETE FROM sites WHERE id=?1", [id])?;
+        self.conn
+            .execute("DELETE FROM sites WHERE id=?1", [id])
+            .context("删除站点失败")?;
         Ok(())
     }
 
     #[allow(dead_code)] // Task 8 应用接线接入后使用
     pub fn get_site(&self, id: i64) -> Result<Option<Site>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, name, domain, login_path, sign_in_path, user_info_path,
-                    tokens_path, logs_path, chart_path, api_user_key, created_at, updated_at
-             FROM sites WHERE id=?1",
-        )?;
-        let mut rows = stmt.query([id])?;
-        Ok(match rows.next()? {
-            Some(row) => Some(Self::row_to_site(row)?),
-            None => None,
-        })
+        self.conn
+            .query_row(
+                &format!("SELECT {SITE_COLS} FROM sites WHERE id=?1"),
+                [id],
+                Self::row_to_site,
+            )
+            .optional()
+            .context("查询站点失败")
     }
 
     #[allow(dead_code)] // Task 7 .env 导入接入后使用
     pub fn find_site_by_name(&self, name: &str) -> Result<Option<Site>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, name, domain, login_path, sign_in_path, user_info_path,
-                    tokens_path, logs_path, chart_path, api_user_key, created_at, updated_at
-             FROM sites WHERE name=?1",
-        )?;
-        let mut rows = stmt.query([name])?;
-        Ok(match rows.next()? {
-            Some(row) => Some(Self::row_to_site(row)?),
-            None => None,
-        })
+        self.conn
+            .query_row(
+                &format!("SELECT {SITE_COLS} FROM sites WHERE name=?1"),
+                [name],
+                Self::row_to_site,
+            )
+            .optional()
+            .context("按名称查询站点失败")
     }
 
     #[allow(dead_code)] // Task 8 应用接线接入后使用
     pub fn list_sites(&self) -> Result<Vec<Site>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, name, domain, login_path, sign_in_path, user_info_path,
-                    tokens_path, logs_path, chart_path, api_user_key, created_at, updated_at
-             FROM sites ORDER BY id",
-        )?;
-        let rows = stmt.query_map([], Self::row_to_site)?;
-        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+        let mut stmt = self
+            .conn
+            .prepare(&format!("SELECT {SITE_COLS} FROM sites ORDER BY id"))
+            .context("查询站点列表失败")?;
+        let sites = stmt
+            .query_map([], Self::row_to_site)
+            .and_then(|rows| rows.collect::<rusqlite::Result<Vec<_>>>())
+            .context("查询站点列表失败")?;
+        Ok(sites)
     }
 
-    /// 行 → Site 的唯一映射来源(三个查询共用,列顺序以 SELECT 为准)。
+    /// 行 → Site 的唯一映射来源(三个查询共用,列顺序以 `SITE_COLS` 为准)。
     #[allow(dead_code)] // Task 8 应用接线接入后使用
     fn row_to_site(row: &rusqlite::Row<'_>) -> rusqlite::Result<Site> {
         Ok(Site {
@@ -451,10 +461,23 @@ mod tests {
         assert_eq!(site.name, "AnyRouter2");
         assert_eq!(site.sign_in_path, None);
 
+        // 按现名应查回同一行;不存在的名字应返回 None
+        let by_name = s.find_site_by_name("AnyRouter2").unwrap().expect("按名查询应命中");
+        assert_eq!(by_name.id, id);
+        assert!(s.find_site_by_name("NoSuchSite").unwrap().is_none());
+
         assert_eq!(s.list_sites().unwrap().len(), 1);
         s.delete_site(id).unwrap();
         assert!(s.get_site(id).unwrap().is_none());
         assert!(s.list_sites().unwrap().is_empty());
+    }
+
+    #[test]
+    fn update_missing_site_fails() {
+        let s = test_storage();
+        let input = SiteInput::with_defaults("Ghost", "https://ghost.example.com");
+        let err = s.update_site(9999, &input).unwrap_err();
+        assert!(err.to_string().contains("9999"), "错误信息应指明缺失的 id:{err}");
     }
 
     #[test]
