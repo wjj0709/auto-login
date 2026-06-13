@@ -8,3 +8,7 @@ serde_json = "1"
 tokio = { version = "1", features = ["full"] }
 chrono = "0.4"
 anyhow = "1"
+
+[patch.crates-io]
+core-foundation = { git = "https://github.com/servo/core-foundation-rs", package = "core-foundation", rev = "refs/tags/core-foundation-v0.10.0" }
+core-foundation-sys = { git = "https://github.com/servo/core-foundation-rs", package = "core-foundation-sys", rev = "refs/tags/core-foundation-v0.10.0" }

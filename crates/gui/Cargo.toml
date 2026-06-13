@@ -11,6 +11,6 @@ serde_json = { workspace = true }
 tokio = { workspace = true }
 chrono = { workspace = true }
 anyhow = { workspace = true }
-eframe = { version = "0.31", features = ["default"] }
-egui = "0.31"
+gpui = { git = "https://github.com/zed-industries/zed", package = "gpui" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", package = "gpui_platform" }
 dotenvy = "0.15"
