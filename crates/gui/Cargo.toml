@@ -2,7 +2,7 @@
 name = "anyrouter-gui"
 version = "0.1.0"
 edition = "2024"
-description = "AnyRouter GPUI desktop client"
+description = "AnyRouter GUI desktop client"
 
 [dependencies]
 anyrouter-core = { path = "../core" }
@@ -11,3 +11,5 @@ serde_json = { workspace = true }
 tokio = { workspace = true }
 chrono = { workspace = true }
 anyhow = { workspace = true }
+eframe = { version = "0.31", features = ["default"] }
+egui = "0.31"
