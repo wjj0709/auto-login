@@ -3,6 +3,7 @@ pub mod source;
 pub mod env_source;
 pub mod file_source;
 pub mod sqlite_source;
+pub mod merge;
 
 pub use env_source::EnvSource;
 pub use file_source::FileSource;
