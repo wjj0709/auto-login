@@ -1,5 +1,6 @@
 mod balance;
 mod checkin;
+mod cli_args;
 mod config;
 mod log;
 mod notify;

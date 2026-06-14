@@ -5,6 +5,7 @@ edition = "2024"
 description = "AnyRouter auto check-in tool (CLI)"
 
 [dependencies]
+anyrouter-core = { path = "../core" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
