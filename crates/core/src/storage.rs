@@ -6,7 +6,7 @@ use rusqlite::{params, Connection};
 
 use crate::models::{Account, AccountCache, AccountInput, CacheKind, Site, SiteInput};
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 pub struct Storage {
     conn: Connection,
@@ -36,11 +36,12 @@ impl Storage {
         base.join("anyrouter-checkin").join("data.db")
     }
 
-    /// 创建四张表（sites, accounts, account_cache, meta），设置 schema_version
+    /// 创建四张表（sites, accounts, account_cache, meta），按版本执行增量迁移
     fn migrate(&mut self) -> Result<()> {
         let current_version = self.get_schema_version();
 
-        if current_version < SCHEMA_VERSION {
+        // v1：初始建表
+        if current_version < 1 {
             self.conn.execute_batch(
                 "
                 CREATE TABLE IF NOT EXISTS meta (
@@ -52,13 +53,13 @@ impl Storage {
                     id             INTEGER PRIMARY KEY AUTOINCREMENT,
                     name           TEXT NOT NULL,
                     domain         TEXT NOT NULL,
-                    login_path     TEXT NOT NULL DEFAULT '/auth/login',
+                    login_path     TEXT NOT NULL DEFAULT '/login',
                     sign_in_path   TEXT,
-                    user_info_path TEXT NOT NULL DEFAULT '/api/user/getSubInfo',
-                    tokens_path    TEXT NOT NULL DEFAULT '/api/user/getSubTokens',
-                    logs_path      TEXT NOT NULL DEFAULT '/api/user/getSubLogs',
-                    chart_path     TEXT NOT NULL DEFAULT '/api/user/getSubChart',
-                    api_user_key   TEXT NOT NULL DEFAULT 'user',
+                    user_info_path TEXT NOT NULL DEFAULT '/api/user/self',
+                    tokens_path    TEXT NOT NULL DEFAULT '/api/token/',
+                    logs_path      TEXT NOT NULL DEFAULT '/api/log/self',
+                    chart_path     TEXT NOT NULL DEFAULT '/api/data/self',
+                    api_user_key   TEXT NOT NULL DEFAULT 'new-api-user',
                     created_at     TEXT NOT NULL,
                     updated_at     TEXT NOT NULL
                 );
@@ -86,7 +87,23 @@ impl Storage {
                 );
                 ",
             )?;
+        }
 
+        // v2：修正早期版本写错的 new-api 接口路径与请求头名
+        // （getSubInfo / user 等是错误臆造值，应为 /api/user/self / new-api-user）
+        if current_version < 2 {
+            self.conn.execute_batch(
+                "
+                UPDATE sites SET api_user_key = 'new-api-user' WHERE api_user_key = 'user';
+                UPDATE sites SET user_info_path = '/api/user/self' WHERE user_info_path = '/api/user/getSubInfo';
+                UPDATE sites SET tokens_path = '/api/token/' WHERE tokens_path = '/api/user/getSubTokens';
+                UPDATE sites SET logs_path = '/api/log/self' WHERE logs_path = '/api/user/getSubLogs';
+                UPDATE sites SET chart_path = '/api/data/self' WHERE chart_path = '/api/user/getSubChart';
+                ",
+            )?;
+        }
+
+        if current_version < SCHEMA_VERSION {
             self.set_meta("schema_version", &SCHEMA_VERSION.to_string())?;
         }
 

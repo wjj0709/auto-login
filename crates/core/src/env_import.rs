@@ -18,25 +18,25 @@ pub fn import_env_if_needed(storage: &Storage) -> Result<()> {
     let anyrouter_id = storage.insert_site(&SiteInput {
         name: "AnyRouter".to_string(),
         domain: "https://anyrouter.top".to_string(),
-        login_path: "/auth/login".to_string(),
+        login_path: "/login".to_string(),
         sign_in_path: Some("/api/user/sign_in".to_string()),
-        user_info_path: "/api/user/getSubInfo".to_string(),
-        tokens_path: "/api/user/getSubTokens".to_string(),
-        logs_path: "/api/user/getSubLogs".to_string(),
-        chart_path: "/api/user/getSubChart".to_string(),
-        api_user_key: "user".to_string(),
+        user_info_path: "/api/user/self".to_string(),
+        tokens_path: "/api/token/".to_string(),
+        logs_path: "/api/log/self".to_string(),
+        chart_path: "/api/data/self".to_string(),
+        api_user_key: "new-api-user".to_string(),
     })?;
 
     let agentrouter_id = storage.insert_site(&SiteInput {
         name: "AgentRouter".to_string(),
         domain: "https://agentrouter.org".to_string(),
-        login_path: "/auth/login".to_string(),
+        login_path: "/login".to_string(),
         sign_in_path: None,
-        user_info_path: "/api/user/getSubInfo".to_string(),
-        tokens_path: "/api/user/getSubTokens".to_string(),
-        logs_path: "/api/user/getSubLogs".to_string(),
-        chart_path: "/api/user/getSubChart".to_string(),
-        api_user_key: "user".to_string(),
+        user_info_path: "/api/user/self".to_string(),
+        tokens_path: "/api/token/".to_string(),
+        logs_path: "/api/log/self".to_string(),
+        chart_path: "/api/data/self".to_string(),
+        api_user_key: "new-api-user".to_string(),
     })?;
 
     // 3. 读取环境变量 ANYROUTER_ACCOUNTS
