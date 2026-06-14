@@ -4,3 +4,4 @@ pub mod crypto;
 pub mod playwright;
 pub mod service;
 pub mod env_import;
+pub mod config_loader;
