@@ -15,6 +15,7 @@ pub fn render(state: Entity<AppState>, cx: &mut Context<RootView>) -> AnyElement
         ModalKind::ConfirmDelete(target) => render_confirm_delete(target.clone(), state.clone()),
         ModalKind::SiteForm(_) => render_site_form(state.clone(), cx),
         ModalKind::AccountForm { .. } => render_account_form(state.clone(), cx),
+        ModalKind::Settings => super::settings::render(state.clone(), cx),
     };
 
     let state_close = state;
@@ -807,13 +808,13 @@ fn radio_option(
 // ============================================================================
 // 通用面板组件
 // ============================================================================
-struct PanelButton {
-    label: String,
-    danger: bool,
-    on_click: Box<dyn Fn(&mut gpui::App) + 'static>,
+pub struct PanelButton {
+    pub label: String,
+    pub danger: bool,
+    pub on_click: Box<dyn Fn(&mut gpui::App) + 'static>,
 }
 
-fn panel(
+pub fn panel(
     title: String,
     body: AnyElement,
     buttons: Vec<PanelButton>,

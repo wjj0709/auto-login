@@ -24,6 +24,7 @@ pub enum ModalKind {
     SiteForm(Option<i64>),
     AccountForm { site_id: i64, account_id: Option<i64> },
     ConfirmDelete(DeleteTarget),
+    Settings,
 }
 
 /// 删除确认的目标
@@ -213,6 +214,14 @@ pub struct AppState {
     /// 表单错误提示文本
     pub form_error: Option<String>,
 
+    /// 当前是否启用 SQLite 数据源（禁用时 CRUD 不可用）
+    pub sqlite_enabled: bool,
+
+    /// 设置弹窗里三个源的临时勾选（保存时落库）
+    pub settings_env: bool,
+    pub settings_file: bool,
+    pub settings_sqlite: bool,
+
     // ─── Core 层集成 ──────────────────────────────────────────
     /// 数据库 Storage（主线程使用）
     pub storage: Option<Storage>,
@@ -337,6 +346,10 @@ impl Default for AppState {
             site_form: None,
             account_form: None,
             form_error: None,
+            sqlite_enabled: true,
+            settings_env: true,
+            settings_file: true,
+            settings_sqlite: true,
             storage: None,
             log_rx: None,
             bg_running: Arc::new(AtomicBool::new(false)),

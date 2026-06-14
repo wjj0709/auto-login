@@ -74,6 +74,7 @@ impl Render for RootView {
 impl RootView {
     fn render_titlebar(&self, cx: &mut Context<Self>) -> AnyElement {
         let state = self.state.clone();
+        let state_settings = self.state.clone();
         let running = self.state.read(cx).running;
         let label = if running {
             "⏳ 签到运行中…"
@@ -144,6 +145,16 @@ impl RootView {
                                 trigger_checkin_all(state.clone(), cx);
                             }),
                     )
+                    .child(window_control("win-settings", "⚙", theme::accent_blue(), move |_window, cx| {
+                        state_settings.update(cx, |st, cx| {
+                            // 用当前 sqlite_enabled 初始化勾选；env/file 默认勾选
+                            st.settings_env = true;
+                            st.settings_file = true;
+                            st.settings_sqlite = st.sqlite_enabled;
+                            st.active_modal = Some(crate::app_state::ModalKind::Settings);
+                            cx.notify();
+                        });
+                    }))
                     .child(window_control("win-min", "—", theme::text_muted(), |window, _cx| {
                         window.minimize_window();
                     }))
@@ -799,7 +810,10 @@ fn format_balance(before: Option<f64>, after: Option<f64>) -> String {
 }
 
 /// GUI 入口（由 main.rs 调用）
-pub fn run_app(storage: anyrouter_core::storage::Storage) {
+pub fn run_app(db_path: std::path::PathBuf, sources: Vec<anyrouter_core::config_loader::SourceKind>) {
+    use anyrouter_core::config_loader::SourceKind;
+    let sqlite_enabled = sources.contains(&SourceKind::Sqlite);
+
     // 安装全局 panic hook，把任何线程 / 任何位置的 panic 都打印到 stderr
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -819,7 +833,6 @@ pub fn run_app(storage: anyrouter_core::storage::Storage) {
         default_hook(info);
     }));
 
-    let db_path = anyrouter_core::storage::Storage::default_path();
     eprintln!(
         "[{}] [Info] AnyRouter GUI 启动，数据库: {}",
         chrono::Local::now().format("%H:%M:%S"),
@@ -827,7 +840,13 @@ pub fn run_app(storage: anyrouter_core::storage::Storage) {
     );
     application().run(move |cx: &mut App| {
         bind_text_input_keys(cx);
-        let state = cx.new(|_| AppState::from_storage(storage));
+        let storage = anyrouter_core::storage::Storage::open(&db_path)
+            .expect("failed to open database");
+        let state = cx.new(|_| {
+            let mut s = AppState::from_storage(storage);
+            s.sqlite_enabled = sqlite_enabled;
+            s
+        });
         let bounds = Bounds::centered(None, size(px(1100.0), px(750.0)), cx);
         cx.open_window(
             WindowOptions {
