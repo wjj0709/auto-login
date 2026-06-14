@@ -53,6 +53,22 @@ impl EmailNotifier {
         !self.email_user.is_empty() && !self.email_pass.is_empty() && !self.email_to.is_empty()
     }
 
+    /// 从统一配置的邮件项构造。
+    pub fn from_raw(e: &anyrouter_core::config_loader::RawEmail) -> Self {
+        let sender = if e.sender.is_empty() {
+            e.user.clone()
+        } else {
+            e.sender.clone()
+        };
+        Self {
+            email_user: e.user.clone(),
+            email_pass: e.pass.clone(),
+            email_to: e.to.clone(),
+            email_sender: sender,
+            smtp_server: e.smtp_server.clone(),
+        }
+    }
+
     /// 发送邮件
     pub async fn send(&self, title: &str, content: &str) -> Result<(), String> {
         if !self.is_configured() {
@@ -106,6 +122,19 @@ impl NotificationKit {
         log::info("Initializing notification system...");
         Self {
             email: EmailNotifier::from_env(),
+        }
+    }
+
+    /// 从统一配置的邮件项构造（来自 config_loader 合并结果）。
+    pub fn from_raw(email: Option<&anyrouter_core::config_loader::RawEmail>) -> Self {
+        log::info("Initializing notification system...");
+        match email {
+            Some(e) => Self {
+                email: EmailNotifier::from_raw(e),
+            },
+            None => Self {
+                email: EmailNotifier::from_env(),
+            },
         }
     }
 

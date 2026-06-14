@@ -12,8 +12,53 @@ use chrono::Local;
 
 use balance::{generate_balance_hash, load_balance_hash, save_balance_hash};
 use checkin::{format_check_in_notification, format_user_info_summary, CheckInDetail};
-use config::{load_accounts_config, AppConfig};
+use config::{AccountConfig, ProviderConfig};
 use notify::NotificationKit;
+
+use anyrouter_core::config_loader::{load_unified, LoadOptions, UnifiedConfig};
+use anyrouter_core::storage::Storage;
+
+/// 把统一配置转换为 CLI 现有 playwright runner 需要的类型。
+fn to_runner_inputs(
+    unified: &UnifiedConfig,
+) -> (Vec<AccountConfig>, HashMap<String, ProviderConfig>) {
+    let mut providers: HashMap<String, ProviderConfig> = HashMap::new();
+    for s in &unified.sites {
+        providers.insert(
+            s.name.clone(),
+            ProviderConfig {
+                name: s.name.clone(),
+                domain: s.domain.clone(),
+                login_path: s.login_path.clone(),
+                sign_in_path: s.sign_in_path.clone(),
+                user_info_path: s.user_info_path.clone(),
+                api_user_key: s.api_user_key.clone(),
+            },
+        );
+    }
+
+    let accounts = unified
+        .accounts
+        .iter()
+        .map(|a| {
+            let cookies = match &a.cookies {
+                Some(s) => serde_json::from_str::<serde_json::Value>(s)
+                    .unwrap_or_else(|_| serde_json::Value::String(s.clone())),
+                None => serde_json::Value::Object(serde_json::Map::new()),
+            };
+            AccountConfig {
+                cookies,
+                api_user: a.api_user.clone(),
+                provider: a.site_name.clone(),
+                name: a.display_name.clone(),
+                _username: a.username.clone(),
+                _password: a.password.clone(),
+            }
+        })
+        .collect();
+
+    (accounts, providers)
+}
 
 #[tokio::main]
 async fn main() {
@@ -25,59 +70,37 @@ async fn main() {
     log::now_time(&format!("Program started at {}", Local::now().format("%Y-%m-%d %H:%M:%S")));
     log::separator();
 
-    // ========== 阶段 1: 加载配置 ==========
+    // ========== 阶段 1: 加载配置（统一多源加载）==========
     log::phase("Phase 1: Loading Configuration");
 
-    log::info("===== .env 环境变量配置信息 =====");
-    let env_keys = [
-        ("ANYROUTER_ACCOUNTS", true),
-        ("PROVIDERS", false),
-        ("PLAYWRIGHT_HEADLESS", false),
-        ("PYTHON_BIN", false),
-        ("EMAIL_USER", true),
-        ("EMAIL_PASS", true),
-        ("EMAIL_TO", true),
-        ("EMAIL_SENDER", true),
-        ("CUSTOM_SMTP_SERVER", false),
-    ];
-    for (key, is_sensitive) in &env_keys {
-        match std::env::var(key) {
-            Ok(val) => {
-                let display_val = if *is_sensitive && val.len() > 8 {
-                    format!("{}...{} (长度: {})", &val[..4], &val[val.len().saturating_sub(4)..], val.len())
-                } else if *is_sensitive {
-                    format!("*** (长度: {})", val.len())
-                } else {
-                    val.clone()
-                };
-                log::info(&format!("  {} = {}", key, display_val));
-            }
-            Err(_) => {
-                log::debug(&format!("  {} = (未设置)", key));
-            }
-        }
+    let sources = cli_args::parse_sources(std::env::args().skip(1));
+    log::info(&format!(
+        "启用数据源: [{}]",
+        sources.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+    ));
+
+    let unified = load_unified(&LoadOptions {
+        sources,
+        db_path: Storage::default_path(),
+        config_path: None,
+    });
+
+    let (accounts, providers) = to_runner_inputs(&unified);
+
+    if accounts.is_empty() {
+        log::error("没有可用账户，程序退出");
+        std::process::exit(1);
     }
-    log::separator();
-
-    let app_config = AppConfig::load_from_env();
-
-    let accounts = match load_accounts_config() {
-        Some(a) => a,
-        None => {
-            log::error("Unable to load account configuration, program exits");
-            std::process::exit(1);
-        }
-    };
 
     log::success(&format!("Configuration loaded: {} provider(s), {} account(s)",
-        app_config.providers.len(), accounts.len()));
+        providers.len(), accounts.len()));
 
     let last_balance_hash = load_balance_hash();
 
     // ========== 阶段 2: 通过 Playwright 执行签到 ==========
     log::phase(&format!("Phase 2: Processing {} Account(s) via Playwright", accounts.len()));
 
-    let runner_results = match playwright::run_checkin(&accounts, &app_config.providers).await {
+    let runner_results = match playwright::run_checkin(&accounts, &providers).await {
         Ok(r) => r,
         Err(e) => {
             log::error(&format!("Playwright runner failed: {}", e));
@@ -267,7 +290,7 @@ async fn main() {
         log::raw(&notify_content);
         log::separator();
 
-        let notify = NotificationKit::from_env();
+        let notify = NotificationKit::from_raw(unified.email.as_ref());
         notify.push_message("AnyRouter Check-in Alert", &notify_content).await;
         log::success("Notification sent due to failures or balance changes");
     } else {
