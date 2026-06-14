@@ -15,6 +15,7 @@ pub fn render(state: Entity<AppState>, cx: &mut Context<RootView>) -> AnyElement
     let sites_data: Vec<_> = snap.sites.clone();
 
     let is_empty = sites_data.is_empty();
+    let sqlite_enabled = snap.sqlite_enabled;
 
     div()
         .id("home-scroll")
@@ -32,7 +33,7 @@ pub fn render(state: Entity<AppState>, cx: &mut Context<RootView>) -> AnyElement
             total_today_target,
         ))
         .when(is_empty, |this| this.child(render_empty_hint()))
-        .child(render_site_grid(sites_data, state))
+        .child(render_site_grid(sites_data, state, sqlite_enabled))
         .into_any_element()
 }
 
@@ -110,20 +111,24 @@ fn stat_item(label: &'static str, value: String) -> impl IntoElement {
 fn render_site_grid(
     sites: Vec<anyrouter_core::models::SiteWithStats>,
     state: Entity<AppState>,
+    sqlite_enabled: bool,
 ) -> impl IntoElement {
     let mut grid = div().flex().flex_wrap().gap(px(12.0));
 
     for s in sites {
-        grid = grid.child(render_site_card(s, state.clone()));
+        grid = grid.child(render_site_card(s, state.clone(), sqlite_enabled));
     }
 
-    grid = grid.child(render_new_site_card(state));
+    if sqlite_enabled {
+        grid = grid.child(render_new_site_card(state));
+    }
     grid
 }
 
 fn render_site_card(
     site_stats: anyrouter_core::models::SiteWithStats,
     state: Entity<AppState>,
+    sqlite_enabled: bool,
 ) -> impl IntoElement {
     let site_id = site_stats.site.id;
     let site_name = site_stats.site.name.clone();
@@ -202,50 +207,62 @@ fn render_site_card(
                             });
                         }),
                 )
-                .child(
-                    div()
-                        .id(("site-edit-btn", site_id as usize))
-                        .text_color(theme::text_weakest())
-                        .text_size(px(10.0))
-                        .cursor_pointer()
-                        .hover(|this| this.text_color(theme::text_secondary()))
-                        .child("✎ 编辑")
-                        .on_click(move |_, _w, cx| {
-                            state_for_edit.update(cx, |st, cx| {
-                                st.form_error = None;
-                                if let Some(ref storage) = st.storage {
-                                    if let Ok(Some(site)) = storage.get_site(site_id) {
-                                        st.site_form =
-                                            Some(crate::app_state::SiteFormFields::new_edit(cx, &site));
-                                        st.active_modal = Some(ModalKind::SiteForm(Some(site_id)));
+                .when(sqlite_enabled, |row| {
+                    row.child(
+                        div()
+                            .id(("site-edit-btn", site_id as usize))
+                            .text_color(theme::text_weakest())
+                            .text_size(px(10.0))
+                            .cursor_pointer()
+                            .hover(|this| this.text_color(theme::text_secondary()))
+                            .child("✎ 编辑")
+                            .on_click(move |_, _w, cx| {
+                                state_for_edit.update(cx, |st, cx| {
+                                    st.form_error = None;
+                                    if let Some(ref storage) = st.storage {
+                                        if let Ok(Some(site)) = storage.get_site(site_id) {
+                                            st.site_form = Some(
+                                                crate::app_state::SiteFormFields::new_edit(cx, &site),
+                                            );
+                                            st.active_modal =
+                                                Some(ModalKind::SiteForm(Some(site_id)));
+                                        }
                                     }
-                                }
-                                cx.notify();
-                            });
-                        }),
-                )
-                .child(
-                    div()
-                        .id(("site-delete-btn", site_id as usize))
-                        .text_color(theme::text_weakest())
-                        .text_size(px(10.0))
-                        .cursor_pointer()
-                        .hover(|this| this.text_color(theme::error_red()))
-                        .child("🗑 删除")
-                        .on_click(move |_, _w, cx| {
-                            let nm = name_for_delete.clone();
-                            state_for_delete.update(cx, |st, cx| {
-                                st.active_modal = Some(ModalKind::ConfirmDelete(
-                                    crate::app_state::DeleteTarget::Site {
-                                        id: site_id,
-                                        name: nm,
-                                        account_count,
-                                    },
-                                ));
-                                cx.notify();
-                            });
-                        }),
-                ),
+                                    cx.notify();
+                                });
+                            }),
+                    )
+                    .child(
+                        div()
+                            .id(("site-delete-btn", site_id as usize))
+                            .text_color(theme::text_weakest())
+                            .text_size(px(10.0))
+                            .cursor_pointer()
+                            .hover(|this| this.text_color(theme::error_red()))
+                            .child("🗑 删除")
+                            .on_click(move |_, _w, cx| {
+                                let nm = name_for_delete.clone();
+                                state_for_delete.update(cx, |st, cx| {
+                                    st.active_modal = Some(ModalKind::ConfirmDelete(
+                                        crate::app_state::DeleteTarget::Site {
+                                            id: site_id,
+                                            name: nm,
+                                            account_count,
+                                        },
+                                    ));
+                                    cx.notify();
+                                });
+                            }),
+                    )
+                })
+                .when(!sqlite_enabled, |row| {
+                    row.child(
+                        div()
+                            .text_size(px(10.0))
+                            .text_color(theme::text_weakest())
+                            .child("（启用 SQLite 源后可编辑）"),
+                    )
+                }),
         )
 }
 

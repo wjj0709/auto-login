@@ -49,6 +49,7 @@ fn render_account_list(
     cx: &mut Context<RootView>,
 ) -> AnyElement {
     let snap = state.read(cx);
+    let sqlite_enabled = snap.sqlite_enabled;
     let (site_name, accounts) = if let Some(ref storage) = snap.storage {
         let site_name = storage
             .get_site(site_id)
@@ -159,50 +160,52 @@ fn render_account_list(
                                     );
                                 }),
                         )
-                        .child(
-                            div()
-                                .id(("acc-edit", acc_id as usize))
-                                .text_color(theme::text_weakest())
-                                .cursor_pointer()
-                                .hover(|this| this.text_color(theme::text_secondary()))
-                                .child("✎ 编辑")
-                                .on_click(move |_, _w, cx| {
-                                    state_edit.update(cx, |st, cx| {
-                                        st.form_error = None;
-                                        if let Some(ref storage) = st.storage {
-                                            if let Ok(Some(acc)) = storage.get_account(acc_id) {
-                                                st.account_form = Some(
-                                                    crate::app_state::AccountFormFields::new_edit(
-                                                        cx, &acc,
-                                                    ),
-                                                );
-                                                st.active_modal = Some(ModalKind::AccountForm {
-                                                    site_id: acc.site_id,
-                                                    account_id: Some(acc_id),
-                                                });
+                        .when(sqlite_enabled, move |row| {
+                            row.child(
+                                div()
+                                    .id(("acc-edit", acc_id as usize))
+                                    .text_color(theme::text_weakest())
+                                    .cursor_pointer()
+                                    .hover(|this| this.text_color(theme::text_secondary()))
+                                    .child("✎ 编辑")
+                                    .on_click(move |_, _w, cx| {
+                                        state_edit.update(cx, |st, cx| {
+                                            st.form_error = None;
+                                            if let Some(ref storage) = st.storage {
+                                                if let Ok(Some(acc)) = storage.get_account(acc_id) {
+                                                    st.account_form = Some(
+                                                        crate::app_state::AccountFormFields::new_edit(
+                                                            cx, &acc,
+                                                        ),
+                                                    );
+                                                    st.active_modal = Some(ModalKind::AccountForm {
+                                                        site_id: acc.site_id,
+                                                        account_id: Some(acc_id),
+                                                    });
+                                                }
                                             }
-                                        }
-                                        cx.notify();
-                                    });
-                                }),
-                        )
-                        .child(
-                            div()
-                                .id(("acc-delete", acc_id as usize))
-                                .text_color(theme::text_weakest())
-                                .cursor_pointer()
-                                .hover(|this| this.text_color(theme::error_red()))
-                                .child("🗑 删除")
-                                .on_click(move |_, _w, cx| {
-                                    let nm = acc_name_for_delete.clone();
-                                    state_delete.update(cx, |st, cx| {
-                                        st.active_modal = Some(ModalKind::ConfirmDelete(
-                                            DeleteTarget::Account { id: acc_id, name: nm },
-                                        ));
-                                        cx.notify();
-                                    });
-                                }),
-                        ),
+                                            cx.notify();
+                                        });
+                                    }),
+                            )
+                            .child(
+                                div()
+                                    .id(("acc-delete", acc_id as usize))
+                                    .text_color(theme::text_weakest())
+                                    .cursor_pointer()
+                                    .hover(|this| this.text_color(theme::error_red()))
+                                    .child("🗑 删除")
+                                    .on_click(move |_, _w, cx| {
+                                        let nm = acc_name_for_delete.clone();
+                                        state_delete.update(cx, |st, cx| {
+                                            st.active_modal = Some(ModalKind::ConfirmDelete(
+                                                DeleteTarget::Account { id: acc_id, name: nm },
+                                            ));
+                                            cx.notify();
+                                        });
+                                    }),
+                            )
+                        }),
                 ),
         );
     }
@@ -210,48 +213,53 @@ fn render_account_list(
     let state_close = state.clone();
     let state_checkin = state.clone();
     let state_add = state;
+
+    let mut buttons: Vec<PanelButton> = Vec::new();
+    // 仅在启用 SQLite 源时允许新增账户（需写库）
+    if sqlite_enabled {
+        buttons.push(PanelButton {
+            label: "+ 新增账户".into(),
+            danger: false,
+            on_click: Box::new(move |cx| {
+                state_add.update(cx, |st, cx| {
+                    st.form_error = None;
+                    st.account_form =
+                        Some(crate::app_state::AccountFormFields::new_create(cx, site_id));
+                    st.active_modal = Some(ModalKind::AccountForm {
+                        site_id,
+                        account_id: None,
+                    });
+                    cx.notify();
+                });
+            }),
+        });
+    }
+    buttons.push(PanelButton {
+        label: "⚡ 签到本站点".into(),
+        danger: false,
+        on_click: Box::new(move |cx| {
+            crate::views::root::trigger_checkin_site(state_checkin.clone(), site_id, cx);
+            state_checkin.update(cx, |st, cx| {
+                st.active_modal = None;
+                cx.notify();
+            });
+        }),
+    });
+    buttons.push(PanelButton {
+        label: "关闭".into(),
+        danger: false,
+        on_click: Box::new(move |cx| {
+            state_close.update(cx, |st, cx| {
+                st.active_modal = None;
+                cx.notify();
+            });
+        }),
+    });
+
     panel(
         format!("{} · 账户管理", site_name),
         list.into_any_element(),
-        vec![
-            PanelButton {
-                label: "+ 新增账户".into(),
-                danger: false,
-                on_click: Box::new(move |cx| {
-                    state_add.update(cx, |st, cx| {
-                        st.form_error = None;
-                        st.account_form =
-                            Some(crate::app_state::AccountFormFields::new_create(cx, site_id));
-                        st.active_modal = Some(ModalKind::AccountForm {
-                            site_id,
-                            account_id: None,
-                        });
-                        cx.notify();
-                    });
-                }),
-            },
-            PanelButton {
-                label: "⚡ 签到本站点".into(),
-                danger: false,
-                on_click: Box::new(move |cx| {
-                    crate::views::root::trigger_checkin_site(state_checkin.clone(), site_id, cx);
-                    state_checkin.update(cx, |st, cx| {
-                        st.active_modal = None;
-                        cx.notify();
-                    });
-                }),
-            },
-            PanelButton {
-                label: "关闭".into(),
-                danger: false,
-                on_click: Box::new(move |cx| {
-                    state_close.update(cx, |st, cx| {
-                        st.active_modal = None;
-                        cx.notify();
-                    });
-                }),
-            },
-        ],
+        buttons,
         px(520.0),
     )
 }
