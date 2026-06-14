@@ -105,8 +105,10 @@ pub async fn checkin_accounts(
             }
         }
 
-        let balance_before = pw_result.before.as_ref().map(|q| q.quota - q.used_quota);
-        let balance_after = pw_result.after.as_ref().map(|q| q.quota - q.used_quota);
+        // new-api 的 quota 字段即「当前剩余额度」，used_quota 是累计已消耗，
+        // 二者不能相减（相减会得到负值）。余额直接取 quota。
+        let balance_before = pw_result.before.as_ref().map(|q| q.quota);
+        let balance_after = pw_result.after.as_ref().map(|q| q.quota);
 
         results.push(CheckinResult {
             account_name: pw_result.name.clone(),

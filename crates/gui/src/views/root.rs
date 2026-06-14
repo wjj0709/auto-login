@@ -572,10 +572,7 @@ fn run_checkin_site_in_thread(
             for r in results {
                 if r.success {
                     ok += 1;
-                    let after = r
-                        .balance_after
-                        .map(|b| format!(" 余额 ${:.2}", b))
-                        .unwrap_or_default();
+                    let after = format_balance(r.balance_before, r.balance_after);
                     send(
                         LogLevel::Success,
                         format!("[{}] {} 签到成功{}", site.name, r.account_name, after),
@@ -782,6 +779,23 @@ where
         // 不论成功 / panic 都标记结束，避免 UI 卡在「运行中」
         bg_running.store(false, Ordering::Relaxed);
     });
+}
+
+/// 格式化签到前后余额，用于成功日志。
+/// - 前后都有：` 余额 $424.26 → $449.26 (+$25.00)`
+/// - 仅有签到后：` 余额 $449.26`
+/// - 都没有：空字符串
+fn format_balance(before: Option<f64>, after: Option<f64>) -> String {
+    match (before, after) {
+        (Some(b), Some(a)) => {
+            let delta = a - b;
+            let sign = if delta >= 0.0 { "+" } else { "-" };
+            format!(" 余额 ${:.2} → ${:.2} ({}${:.2})", b, a, sign, delta.abs())
+        }
+        (None, Some(a)) => format!(" 余额 ${:.2}", a),
+        (Some(b), None) => format!(" 余额 ${:.2}", b),
+        (None, None) => String::new(),
+    }
 }
 
 /// GUI 入口（由 main.rs 调用）
@@ -1012,7 +1026,7 @@ fn run_checkin_in_thread(
                 for r in results {
                     if r.success {
                         total_success += 1;
-                        let after = r.balance_after.map(|b| format!(" 余额 ${:.2}", b)).unwrap_or_default();
+                        let after = format_balance(r.balance_before, r.balance_after);
                         send(
                             LogLevel::Success,
                             format!("[{}] {} 签到成功{}", site.name, r.account_name, after),
