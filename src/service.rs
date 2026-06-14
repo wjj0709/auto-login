@@ -5,7 +5,7 @@ use gpui::{App, WeakEntity};
 use crate::app_state::{AppState, CheckInStatus, LogLevel};
 use crate::config::{AccountConfig, ProviderConfig};
 use crate::cookie;
-use crate::playwright::{self, CookieEntry, PlaywrightResult};
+use crate::playwright::{self, CookieEntry, PlaywrightResult, RunOutput};
 use crate::storage::{account_to_legacy_config, site_to_provider_config, AccountInput, Site};
 
 /// 签到范围:全部 / 单站点 / 单账户。
@@ -100,7 +100,15 @@ pub fn run_checkin(app_state: WeakEntity<AppState>, scope: CheckinScope, cx: &mu
         let result = playwright::run_checkin(&configs, &providers).await;
 
         match result {
-            Ok(results) => {
+            Ok(RunOutput { results, stderr_lines }) => {
+                // 将子进程 API 调用日志输出到 UI
+                for line in &stderr_lines {
+                    let _ = app_state.update(cx, |state, cx| {
+                        state.add_log(LogLevel::Info, "Playwright", line);
+                        cx.notify();
+                    });
+                }
+
                 // 结果按协议 name(account_id 字符串)回填
                 let mut result_map: HashMap<i64, PlaywrightResult> = HashMap::new();
                 for r in results {
@@ -218,10 +226,20 @@ pub fn run_login(app_state: WeakEntity<AppState>, account_id: i64, cx: &mut App)
 
         let result = playwright::run_login(&[cfg], &providers).await;
 
+        // 输出子进程 API 日志到 UI
+        if let Ok(ref output) = result {
+            for line in &output.stderr_lines {
+                let _ = app_state.update(cx, |state, cx| {
+                    state.add_log(LogLevel::Info, "Playwright", line);
+                    cx.notify();
+                });
+            }
+        }
+
         let _ = app_state.update(cx, |state, cx| {
             let name = state.account_by_id(account_id).map(|a| a.name.clone()).unwrap_or_default();
             match result {
-                Ok(mut results) => match results.pop() {
+                Ok(RunOutput { mut results, .. }) => match results.pop() {
                     Some(r) if r.success => {
                         let cookies = r.cookies.clone();
                         state.set_status(account_id, CheckInStatus::Success);
@@ -366,11 +384,21 @@ pub fn run_fetch_detail(app_state: WeakEntity<AppState>, account_id: i64, cx: &m
 
         let result = playwright::run_fetch_detail(&[cfg], &providers).await;
 
+        // 输出子进程 API 日志到 UI
+        if let Ok(ref output) = result {
+            for line in &output.stderr_lines {
+                let _ = app_state.update(cx, |state, cx| {
+                    state.add_log(LogLevel::Info, "Playwright", line);
+                    cx.notify();
+                });
+            }
+        }
+
         let _ = app_state.update(cx, |state, cx| {
             state.fetching_detail = None;
             let name = state.account_by_id(account_id).map(|a| a.name.clone()).unwrap_or_default();
             match result {
-                Ok(mut results) => match results.pop() {
+                Ok(RunOutput { mut results, .. }) => match results.pop() {
                     Some(r) if r.success => {
                         let tokens_json = serde_json::to_string(&r.tokens).unwrap_or_else(|_| "[]".into());
                         let logs_json = serde_json::to_string(&r.logs).unwrap_or_else(|_| "[]".into());

@@ -180,7 +180,12 @@ async def fetch_in_page(page: Page, url: str, method: str, headers: dict[str, st
         }
     }
     """
-    return await page.evaluate(js, {"url": url, "method": method, "headers": headers, "body": body})
+    resp = await page.evaluate(js, {"url": url, "method": method, "headers": headers, "body": body})
+    if resp.get("ok"):
+        log(f"  → {method} {url} => HTTP {resp.get('status')}")
+    else:
+        log(f"  → {method} {url} => FAILED: {resp.get('error')}")
+    return resp
 
 
 def build_api_headers(account: AccountInput) -> dict[str, str]:
@@ -207,11 +212,14 @@ async def call_user_info(page: Page, account: AccountInput) -> tuple[bool, dict 
     except json.JSONDecodeError:
         return False, None, None, f"invalid JSON: {resp['body'][:200]}"
     if not data.get("success"):
+        log(f"[{account.name}] user_info: success=false, msg={data.get('message')}")
         return False, None, None, f"server returned success=false: {data.get('message') or data}"
     user_data = data.get("data") or {}
+    quota_info = normalize_quota(user_data.get("quota"), user_data.get("used_quota"))
+    log(f"[{account.name}] user_info ok: quota=${quota_info['quota']:.2f} used=${quota_info['used_quota']:.2f}")
     return (
         True,
-        normalize_quota(user_data.get("quota"), user_data.get("used_quota")),
+        quota_info,
         sanitize_user_info(user_data),
         None,
     )
@@ -241,11 +249,14 @@ async def call_sign_in(page: Page, account: AccountInput) -> tuple[bool, dict | 
         or data.get("success") is True
     )
     if is_success:
+        log(f"[{account.name}] sign_in success: {data.get('msg') or data.get('message') or 'ok'}")
         return True, data, None
     msg = (data.get("msg") or data.get("message") or "").lower()
     already_keywords = ["已经签到", "已签到", "重复签到", "already checked", "already signed"]
     if any(kw in msg for kw in already_keywords):
+        log(f"[{account.name}] sign_in: already checked in today")
         return True, data, None
+    log(f"[{account.name}] sign_in failed: {data.get('msg') or data.get('message')}")
     return False, data, f"sign_in failed: {data.get('msg') or data.get('message')}"
 
 
@@ -288,7 +299,9 @@ async def perform_login(page: Page, account: AccountInput) -> tuple[bool, str | 
     except json.JSONDecodeError:
         return False, f"login invalid JSON: {resp['body'][:200]}"
     if not data.get("success"):
+        log(f"[{account.name}] login rejected: {data.get('message') or data}")
         return False, f"login rejected: {data.get('message') or data}"
+    log(f"[{account.name}] login success")
     return True, None
 
 
@@ -344,10 +357,22 @@ async def process_account(
         # 先访问首页让浏览器拿到 WAF cookies (acw_tc / acw_sc__v2 / cdn_sec_tc)
         nav_url = f"{account.domain}{account.login_path}"
         log(f"[{account.name}] goto {nav_url}")
-        try:
-            await page.goto(nav_url, wait_until="domcontentloaded")
-        except Exception as e:
-            log(f"[{account.name}] goto warning: {e}")
+        goto_ok = False
+        for attempt in range(3):
+            try:
+                await page.goto(nav_url, wait_until="domcontentloaded")
+                goto_ok = True
+                break
+            except Exception as e:
+                log(f"[{account.name}] goto attempt {attempt+1} failed: {e}")
+                await asyncio.sleep(1)
+        if not goto_ok:
+            # 导航失败后 execution context 被销毁,回退到 about:blank 恢复可用上下文
+            log(f"[{account.name}] goto failed, falling back to about:blank for API calls")
+            try:
+                await page.goto("about:blank", wait_until="domcontentloaded")
+            except Exception:
+                pass
 
         if action == "login":
             # 账密登录:强制走 perform_login,成功后取一次 user_info 作为校验
@@ -449,6 +474,7 @@ async def run(payload: dict) -> dict:
                 headless=headless,
                 user_agent=CHROME_UA,
                 viewport={"width": 1280, "height": 800},
+                ignore_https_errors=True,
                 args=[
                     "--disable-blink-features=AutomationControlled",
                     "--disable-dev-shm-usage",

@@ -99,6 +99,13 @@ struct PlaywrightOutput {
     message: Option<String>,
 }
 
+/// 子进程运行结果:既包含业务结果(results),也包含子进程 stderr 日志(供 UI 展示)。
+#[derive(Debug)]
+pub struct RunOutput {
+    pub results: Vec<PlaywrightResult>,
+    pub stderr_lines: Vec<String>,
+}
+
 fn build_account(account: &AccountConfig, provider: &ProviderConfig, index: usize) -> PlaywrightAccount {
     PlaywrightAccount {
         name: account.get_display_name(index),
@@ -154,7 +161,25 @@ fn locate_script() -> PathBuf {
 }
 
 fn locate_python() -> String {
-    std::env::var("PYTHON_BIN").unwrap_or_else(|_| "python3".to_string())
+    if let Ok(p) = std::env::var("PYTHON_BIN") {
+        return p;
+    }
+    // Windows 的 Microsoft Store 会安装名为 python3 的存根(exit code 49,无输出),
+    // 必须探测 python3 是否为真正的解释器,否则回退到 python。
+    for candidate in ["python3", "python"] {
+        let ok = Command::new(candidate)
+            .arg("--version")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if ok {
+            return candidate.to_string();
+        }
+    }
+    "python3".to_string()
 }
 
 fn headless_flag() -> bool {
@@ -168,7 +193,7 @@ fn headless_flag() -> bool {
 pub async fn run_checkin(
     accounts: &[AccountConfig],
     providers: &std::collections::HashMap<String, ProviderConfig>,
-) -> Result<Vec<PlaywrightResult>, String> {
+) -> Result<RunOutput, String> {
     run_action("checkin", accounts, providers).await
 }
 
@@ -176,7 +201,7 @@ pub async fn run_checkin(
 pub async fn run_login(
     accounts: &[AccountConfig],
     providers: &std::collections::HashMap<String, ProviderConfig>,
-) -> Result<Vec<PlaywrightResult>, String> {
+) -> Result<RunOutput, String> {
     run_action("login", accounts, providers).await
 }
 
@@ -184,7 +209,7 @@ pub async fn run_login(
 pub async fn run_fetch_detail(
     accounts: &[AccountConfig],
     providers: &std::collections::HashMap<String, ProviderConfig>,
-) -> Result<Vec<PlaywrightResult>, String> {
+) -> Result<RunOutput, String> {
     run_action("fetch_detail", accounts, providers).await
 }
 
@@ -193,7 +218,7 @@ async fn run_action(
     action: &str,
     accounts: &[AccountConfig],
     providers: &std::collections::HashMap<String, ProviderConfig>,
-) -> Result<Vec<PlaywrightResult>, String> {
+) -> Result<RunOutput, String> {
     let start = Instant::now();
     let mut payload_accounts: Vec<PlaywrightAccount> = Vec::with_capacity(accounts.len());
     for (i, account) in accounts.iter().enumerate() {
@@ -263,18 +288,18 @@ async fn run_action(
 ///
 /// 协议:子脚本 `main()` 先 `sys.stdin.read()` 读完整 stdin、再向 stdout 写结果
 /// (见 `scripts/playwright_checkin.py`),因此「写完 stdin → drop 关闭 → 读 stdout」的
-/// 顺序不会触发管道死锁;stderr 透传到终端(非管道),也不会占满缓冲区。
+/// 顺序不会触发管道死锁。stderr 也 piped 以便捕获 API 调用日志并回传给上层 UI。
 fn run_subprocess_blocking(
     python: String,
     script: PathBuf,
     payload_str: String,
     start: Instant,
-) -> Result<Vec<PlaywrightResult>, String> {
+) -> Result<RunOutput, String> {
     let mut child = Command::new(&python)
         .arg(&script)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
+        .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| {
             format!(
@@ -287,7 +312,6 @@ fn run_subprocess_blocking(
         stdin
             .write_all(payload_str.as_bytes())
             .map_err(|e| format!("Failed to write stdin: {}", e))?;
-        // 离开作用域时 drop(stdin) 关闭管道 → 子进程读到 EOF
     }
 
     let output = child
@@ -295,19 +319,34 @@ fn run_subprocess_blocking(
         .map_err(|e| format!("Failed to wait child: {}", e))?;
 
     let elapsed = start.elapsed();
+    let stderr_text = String::from_utf8_lossy(&output.stderr).to_string();
+
+    // 将子进程 stderr(含 API 调用日志)逐行打印到 Rust 侧日志
+    for line in stderr_text.lines() {
+        if !line.trim().is_empty() {
+            log::debug(line);
+        }
+    }
+
     log::info(&format!(
-        "Playwright runner finished in {:.1?}, exit_code={:?}, stdout={} bytes",
+        "Playwright runner finished in {:.1?}, exit_code={:?}, stdout={} bytes, stderr={} bytes",
         elapsed,
         output.status.code(),
-        output.stdout.len()
+        output.stdout.len(),
+        output.stderr.len(),
     ));
 
     if !output.status.success() {
         let stdout_text = String::from_utf8_lossy(&output.stdout).to_string();
+        let detail = if !stderr_text.is_empty() {
+            stderr_text.lines().last().unwrap_or("").to_string()
+        } else {
+            stdout_text.chars().take(500).collect::<String>()
+        };
         return Err(format!(
             "Playwright runner exited with code {:?}: {}",
             output.status.code(),
-            stdout_text.chars().take(500).collect::<String>()
+            detail
         ));
     }
 
@@ -327,7 +366,16 @@ fn run_subprocess_blocking(
         ));
     }
 
-    Ok(parsed.results)
+    let stderr_lines: Vec<String> = stderr_text
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| l.to_string())
+        .collect();
+
+    Ok(RunOutput {
+        results: parsed.results,
+        stderr_lines,
+    })
 }
 
 #[cfg(test)]
@@ -437,12 +485,12 @@ mod tests {
             },
         );
 
-        let results = block_on(run_checkin(&[account], &providers))
+        let output = block_on(run_checkin(&[account], &providers))
             .expect("run_checkin 应在非 Tokio 执行器上成功完成");
 
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].name, "7");
-        assert!(results[0].success);
+        assert_eq!(output.results.len(), 1);
+        assert_eq!(output.results[0].name, "7");
+        assert!(output.results[0].success);
 
         let _ = std::fs::remove_file(&script);
     }
