@@ -1496,6 +1496,11 @@ async def perform_sso_login(
         # LinuxDo：先登录论坛建立会话，再发起 OAuth 授权
         if provider == "linuxdo":
             await login_linuxdo_forum(page, account, timeout_ms)
+            # 预登录会把页面停在 linux.do；回到目标站，确保后续 state/client_id 在同源上下文获取
+            await page.goto(
+                f"{account.domain}{account.login_path}", wait_until="domcontentloaded"
+            )
+            await wait_for_page_stability(page, min(timeout_ms, 8000))
 
         entry = await start_oauth_authorization(page, account, provider)
         log(f"[{account.name}] SSO entry via {entry}")
