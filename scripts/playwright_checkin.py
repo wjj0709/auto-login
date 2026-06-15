@@ -915,6 +915,35 @@ def sso_button_selectors(provider: str) -> list[str]:
     raise ValueError(f"unsupported SSO provider: {provider}")
 
 
+def linuxdo_login_selectors() -> dict[str, list[str]]:
+    """linux.do 登录页候选选择器（用户名 / 密码 / 提交按钮）。
+
+    以 Discourse 常见结构为主，附通用回退；实现/调试时可对照实时 DOM 调整。
+    """
+    return {
+        "username": [
+            "#login-account-name",
+            "input[name='login']",
+            "input[name='username']",
+            "input[type='email']",
+            "input[type='text']",
+        ],
+        "password": [
+            "#login-account-password",
+            "input[name='password']",
+            "input[type='password']",
+        ],
+        "submit": [
+            "#login-button",
+            "button[type='submit']",
+            "input[type='submit']",
+            "button:has-text('登录')",
+            "button:has-text('Log In')",
+            "button:has-text('Sign In')",
+        ],
+    }
+
+
 async def click_first_available(page: Page, selectors: list[str], timeout_ms: int = 5000) -> str:
     """依次尝试点击候选选择器，返回命中的选择器。"""
     errors: list[str] = []

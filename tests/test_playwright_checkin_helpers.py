@@ -160,6 +160,13 @@ class PlaywrightCheckinHelpersTest(unittest.TestCase):
 
         self.assertEqual(playwright_checkin.sanitize_for_json(data), data)
 
+    def test_linuxdo_login_selectors_cover_username_password_submit(self):
+        sel = playwright_checkin.linuxdo_login_selectors()
+        self.assertTrue(sel["username"] and sel["password"] and sel["submit"])
+        self.assertTrue(any("login-account-name" in s for s in sel["username"]))
+        self.assertTrue(any("password" in s for s in sel["password"]))
+        self.assertTrue(any("login-button" in s or "submit" in s for s in sel["submit"]))
+
 
 class PlaywrightCheckinAsyncTest(unittest.IsolatedAsyncioTestCase):
     async def test_click_first_available_uses_playwright_first_property(self):
