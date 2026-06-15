@@ -167,6 +167,20 @@ class PlaywrightCheckinHelpersTest(unittest.TestCase):
         self.assertTrue(any("password" in s for s in sel["password"]))
         self.assertTrue(any("login-button" in s or "submit" in s for s in sel["submit"]))
 
+    def test_detect_cloudflare_challenge_flags_known_markers(self):
+        self.assertTrue(playwright_checkin.detect_cloudflare_challenge("Just a moment...", ""))
+        self.assertTrue(
+            playwright_checkin.detect_cloudflare_challenge("", "Checking your browser before accessing")
+        )
+        self.assertTrue(
+            playwright_checkin.detect_cloudflare_challenge("Attention Required! | Cloudflare", "")
+        )
+
+    def test_detect_cloudflare_challenge_ignores_normal_login_page(self):
+        self.assertFalse(
+            playwright_checkin.detect_cloudflare_challenge("登录 - LINUX DO", "用户名 密码 登录")
+        )
+
 
 class PlaywrightCheckinAsyncTest(unittest.IsolatedAsyncioTestCase):
     async def test_click_first_available_uses_playwright_first_property(self):

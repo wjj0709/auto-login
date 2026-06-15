@@ -944,6 +944,24 @@ def linuxdo_login_selectors() -> dict[str, list[str]]:
     }
 
 
+# Cloudflare 人机校验页常见标记（小写匹配）。
+CLOUDFLARE_CHALLENGE_MARKERS = (
+    "just a moment",
+    "checking your browser",
+    "attention required",
+    "cf-challenge",
+    "cf-browser-verification",
+    "请稍候",
+    "正在验证",
+)
+
+
+def detect_cloudflare_challenge(title: str, body: str) -> bool:
+    """根据页面标题/正文判断是否落在 Cloudflare 人机校验页。"""
+    haystack = f"{title}\n{body}".lower()
+    return any(marker in haystack for marker in CLOUDFLARE_CHALLENGE_MARKERS)
+
+
 async def click_first_available(page: Page, selectors: list[str], timeout_ms: int = 5000) -> str:
     """依次尝试点击候选选择器，返回命中的选择器。"""
     errors: list[str] = []
