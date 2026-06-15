@@ -1353,6 +1353,40 @@ async def login_linuxdo_sso(page: Page, account: AccountInput, timeout_ms: int) 
     await wait_for_return_to_service(page, account, timeout_ms)
 
 
+async def login_linuxdo_forum(page: Page, account: AccountInput, timeout_ms: int) -> None:
+    """先登录 linux.do 论坛，建立会话，供后续 connect.linux.do OAuth 授权复用。"""
+    assert account.sso_username is not None
+    assert account.sso_password is not None
+
+    await page.goto("https://linux.do/login", wait_until="domcontentloaded")
+    await wait_for_page_stability(page, min(timeout_ms, 8000))
+
+    title = await page.title()
+    try:
+        body = await page.inner_text("body", timeout=2000)
+    except Exception:
+        body = ""
+    if detect_cloudflare_challenge(title, body):
+        raise RuntimeError(
+            "linux.do 被 Cloudflare 拦截（人机校验）；建议设置 PLAYWRIGHT_HEADLESS=0 手动通过，"
+            "或在浏览器上下文复用有效的 cf_clearance。"
+        )
+
+    selectors = linuxdo_login_selectors()
+    await fill_first_available(page, selectors["username"], account.sso_username)
+    await fill_first_available(page, selectors["password"], account.sso_password)
+    await click_first_available(page, selectors["submit"])
+    await wait_for_page_stability(page, min(timeout_ms, 8000))
+
+    if not await wait_for_session_cookie(
+        page.context, "https://linux.do", timeout_ms, cookie_names=("_t", "_forum_session")
+    ):
+        raise RuntimeError(
+            f"linuxdo forum login failed: 登录后未检测到 linux.do 会话 cookie (current_url={page.url})"
+        )
+    log(f"[{account.name}] linux.do forum login OK")
+
+
 async def session_cookie_present(
     context: BrowserContext,
     domain: str,

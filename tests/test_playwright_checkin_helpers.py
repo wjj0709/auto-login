@@ -3,6 +3,7 @@ import json
 import pathlib
 import sys
 import unittest
+from unittest import mock
 
 
 def load_module():
@@ -197,6 +198,126 @@ class PlaywrightCheckinAsyncTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(
             await playwright_checkin.session_cookie_present(ctx, "https://linux.do", ("session",))
         )
+
+    async def test_login_linuxdo_forum_fills_and_confirms_session(self):
+        rec = []
+
+        class FakeLocator:
+            def __init__(self, selector):
+                self._selector = selector
+
+            @property
+            def first(self):
+                return self
+
+            async def wait_for(self, state, timeout):
+                pass
+
+            async def fill(self, value, timeout=0):
+                rec.append(("fill", self._selector, value))
+
+            async def click(self, timeout=0, force=False):
+                rec.append(("click", self._selector))
+
+        class FakeContext:
+            async def cookies(self, _urls):
+                return [{"name": "_t", "value": "sess"}]
+
+        class FakePage:
+            def __init__(self, title):
+                self._title = title
+                self.context = FakeContext()
+                self.url = "https://linux.do/login"
+
+            async def goto(self, url, wait_until=None):
+                rec.append(("goto", url))
+
+            async def title(self):
+                return self._title
+
+            async def inner_text(self, selector, timeout=0):
+                return ""
+
+            def locator(self, selector):
+                return FakeLocator(selector)
+
+        account = playwright_checkin.AccountInput(
+            name="L", provider="anyrouter", domain="https://anyrouter.top",
+            login_path="/login", sign_in_path="/api/user/sign_in",
+            user_info_path="/api/user/self", api_user_key="new-api-user", api_user="190030",
+            sso_provider="linuxdo", sso_username="nianliu.wjj", sso_password="pw",
+        )
+
+        async def _noop(*args, **kwargs):
+            return None
+
+        with mock.patch.object(playwright_checkin, "wait_for_page_stability", _noop):
+            await playwright_checkin.login_linuxdo_forum(FakePage("登录 - LINUX DO"), account, timeout_ms=5000)
+
+        filled_values = [r[2] for r in rec if r[0] == "fill"]
+        self.assertIn("nianliu.wjj", filled_values)
+        self.assertIn("pw", filled_values)
+        self.assertTrue(any(r[0] == "click" for r in rec))
+        self.assertTrue(any(r == ("goto", "https://linux.do/login") for r in rec))
+
+    async def test_login_linuxdo_forum_raises_on_cloudflare(self):
+        rec = []
+
+        class FakeLocator:
+            def __init__(self, selector):
+                self._selector = selector
+
+            @property
+            def first(self):
+                return self
+
+            async def wait_for(self, state, timeout):
+                pass
+
+            async def fill(self, value, timeout=0):
+                rec.append(("fill", self._selector, value))
+
+            async def click(self, timeout=0, force=False):
+                rec.append(("click", self._selector))
+
+        class FakeContext:
+            async def cookies(self, _urls):
+                return []
+
+        class FakePage:
+            def __init__(self, title):
+                self._title = title
+                self.context = FakeContext()
+                self.url = "https://linux.do/login"
+
+            async def goto(self, url, wait_until=None):
+                rec.append(("goto", url))
+
+            async def title(self):
+                return self._title
+
+            async def inner_text(self, selector, timeout=0):
+                return ""
+
+            def locator(self, selector):
+                return FakeLocator(selector)
+
+        account = playwright_checkin.AccountInput(
+            name="L", provider="anyrouter", domain="https://anyrouter.top",
+            login_path="/login", sign_in_path="/api/user/sign_in",
+            user_info_path="/api/user/self", api_user_key="new-api-user", api_user="190030",
+            sso_provider="linuxdo", sso_username="nianliu.wjj", sso_password="pw",
+        )
+
+        async def _noop(*args, **kwargs):
+            return None
+
+        with mock.patch.object(playwright_checkin, "wait_for_page_stability", _noop):
+            with self.assertRaises(RuntimeError) as caught:
+                await playwright_checkin.login_linuxdo_forum(FakePage("Just a moment..."), account, timeout_ms=5000)
+
+        self.assertIn("Cloudflare", str(caught.exception))
+        self.assertFalse(any(r[0] == "fill" for r in rec))
 
     async def test_click_first_available_uses_playwright_first_property(self):
         calls = []
