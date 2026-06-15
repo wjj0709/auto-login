@@ -1314,45 +1314,6 @@ def detect_github_login_block(page: Page) -> None:
         raise RuntimeError("GitHub 凭据可能不正确，登录未通过（停留在 GitHub 登录页）")
 
 
-async def login_linuxdo_sso(page: Page, account: AccountInput, timeout_ms: int) -> None:
-    """完成 LinuxDo OAuth 登录表单。"""
-    assert account.sso_username is not None
-    assert account.sso_password is not None
-
-    await fill_first_available(
-        page,
-        [
-            "input[name='login']",
-            "input[name='username']",
-            "input[name='email']",
-            "input[type='email']",
-            "input[type='text']",
-        ],
-        account.sso_username,
-    )
-    await fill_first_available(
-        page,
-        [
-            "input[name='password']",
-            "input[type='password']",
-        ],
-        account.sso_password,
-    )
-    await click_first_available(
-        page,
-        [
-            "button[type='submit']",
-            "input[type='submit']",
-            "button:has-text('登录')",
-            "button:has-text('Log in')",
-            "button:has-text('Sign in')",
-        ],
-    )
-    await wait_for_page_stability(page)
-    await maybe_click_authorize(page)
-    await wait_for_return_to_service(page, account, timeout_ms)
-
-
 async def login_linuxdo_forum(page: Page, account: AccountInput, timeout_ms: int) -> None:
     """先登录 linux.do 论坛，建立会话，供后续 connect.linux.do OAuth 授权复用。"""
     assert account.sso_username is not None
@@ -1532,12 +1493,18 @@ async def perform_sso_login(
     }
 
     try:
+        # LinuxDo：先登录论坛建立会话，再发起 OAuth 授权
+        if provider == "linuxdo":
+            await login_linuxdo_forum(page, account, timeout_ms)
+
         entry = await start_oauth_authorization(page, account, provider)
         log(f"[{account.name}] SSO entry via {entry}")
         if provider == "github":
             await login_github_sso(page, account, timeout_ms)
         elif provider == "linuxdo":
-            await login_linuxdo_sso(page, account, timeout_ms)
+            # 已预登录 linux.do；授权页若需确认则点击，然后等待回跳目标站
+            await maybe_click_authorize(page)
+            await wait_for_return_to_service(page, account, timeout_ms)
         else:
             return False, f"unsupported SSO provider: {provider}", None
     except Exception as err:
