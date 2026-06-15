@@ -8,6 +8,7 @@
 - 支持多 Provider
 - 支持 `cookies` 登录
 - 支持 `username + password` 登录
+- 支持 GitHub / LinuxDo SSO 登录获取 Cookie
 - 支持登录后分析 Cookie 过期时间
 - 支持余额变化检测
 - 支持异步日志、按日期目录分组、按文件大小轮转
@@ -39,13 +40,15 @@ playwright install chromium
 
 ## 快速开始
 
-1. 编辑根目录 `conf.json`
-2. 按需填写 `accounts`、`providers`、`logging`、`email`、`runtime`
+1. 复制样例配置：`cp conf.example.json conf.json`
+2. 编辑 `conf.json`，按需填写 `accounts`、`providers`、`logging`、`email`、`runtime`
 3. 运行：
 
 ```bash
 cargo run --release
 ```
+
+> 仓库提供完整样例 [`conf.example.json`](conf.example.json)，覆盖 Cookie、账密、GitHub/LinuxDo SSO、邮箱自动取设备验证码、自定义 Provider 等全部用法。`conf.json` 含真实凭据，已在 `.gitignore` 中忽略，不会被提交。
 
 ## 配置文件发现顺序
 
@@ -60,6 +63,8 @@ cargo run --release
 
 ## 完整示例
 
+下面是覆盖全部能力的完整配置样例，与仓库根目录的 [`conf.example.json`](conf.example.json) 一致：
+
 ```json
 {
   "runtime": {
@@ -72,40 +77,101 @@ cargo run --release
     "max_file_size_mb": 10
   },
   "email": {
-    "user": "your_email@example.com",
-    "pass": "your_smtp_password",
+    "user": "your_email@qq.com",
+    "pass": "your_smtp_authorization_code",
     "to": "receiver@example.com",
-    "sender": "your_email@example.com",
-    "smtp_server": "smtp.example.com"
+    "sender": "your_email@qq.com",
+    "smtp_server": "smtp.qq.com"
   },
   "providers": {
     "custom": {
+      "name": "custom",
       "domain": "https://example.com",
       "login_path": "/login",
       "sign_in_path": "/api/user/sign_in",
+      "user_info_path": "/api/user/self",
+      "api_user_key": "new-api-user"
+    },
+    "auto-checkin-site": {
+      "domain": "https://auto.example.com",
+      "login_path": "/login",
+      "sign_in_path": null,
       "user_info_path": "/api/user/self",
       "api_user_key": "new-api-user"
     }
   },
   "accounts": [
     {
-      "name": "主账号",
+      "name": "账号A：仅 Cookie（对象格式）",
       "provider": "anyrouter",
       "api_user": "148714",
-      "cookies": {
-        "session": "your_session_cookie"
-      }
+      "cookies": { "session": "your_session_cookie_value" }
     },
     {
-      "name": "备用账号",
+      "name": "账号B：Cookie 字符串格式",
+      "provider": "anyrouter",
+      "api_user": "148715",
+      "cookies": "session=your_session_cookie_value; other_cookie=value"
+    },
+    {
+      "name": "账号C：Cookie + 账密兜底",
+      "provider": "anyrouter",
+      "api_user": "148716",
+      "cookies": { "session": "maybe_expired_session" },
+      "username": "your_login_name",
+      "password": "your_login_password"
+    },
+    {
+      "name": "账号D：仅账号密码",
       "provider": "custom",
       "api_user": "9527",
       "username": "alice",
       "password": "secret"
+    },
+    {
+      "name": "账号E：GitHub SSO + 邮箱自动取设备验证码",
+      "provider": "anyrouter",
+      "api_user": "10086",
+      "sso_provider": "github",
+      "sso_username": "your_github_username",
+      "sso_password": "your_github_password",
+      "sso_email": {
+        "imap_host": "imap.qq.com",
+        "imap_port": 993,
+        "username": "your_mailbox@qq.com",
+        "password": "your_imap_authorization_code",
+        "mailbox": "INBOX"
+      }
+    },
+    {
+      "name": "账号F：LinuxDo SSO",
+      "provider": "anyrouter",
+      "api_user": "10087",
+      "sso_provider": "linuxdo",
+      "sso_username": "your_linuxdo_username",
+      "sso_password": "your_linuxdo_password"
+    },
+    {
+      "name": "账号G：自动签到站点",
+      "provider": "auto-checkin-site",
+      "api_user": "20001",
+      "cookies": { "session": "your_session_cookie_value" }
     }
   ]
 }
 ```
+
+各账号示例对应的登录方式：
+
+| 示例账号 | 登录方式 | 说明 |
+|----------|----------|------|
+| 账号A | Cookie（对象格式） | 最常见，`session` 失效后需手动更新 |
+| 账号B | Cookie（字符串格式） | `"k1=v1; k2=v2"` 写法 |
+| 账号C | Cookie + 账密兜底 | Cookie 失效时浏览器自动用账密重新登录 |
+| 账号D | 仅账号密码 | 首次运行即由浏览器登录获取 Cookie |
+| 账号E | GitHub SSO + `sso_email` | 触发设备验证时自动从邮箱读取验证码 |
+| 账号F | LinuxDo SSO | 通过 LinuxDo 授权登录 |
+| 账号G | 自动签到站点 | Provider 的 `sign_in_path = null`，访问即签到 |
 
 ## 顶层配置项
 
@@ -260,13 +326,23 @@ logs/
 | `accounts[].name` | string | 否 | `Account N` | 展示名称 |
 | `accounts[].username` | string | 条件必填 | 无 | 登录用户名 |
 | `accounts[].password` | string | 条件必填 | 无 | 登录密码 |
+| `accounts[].sso_provider` | string | 条件必填 | 无 | SSO 平台，支持 `github` / `linuxdo` |
+| `accounts[].sso_username` | string | 条件必填 | 无 | SSO 平台用户名或邮箱 |
+| `accounts[].sso_password` | string | 条件必填 | 无 | SSO 平台密码 |
+| `accounts[].sso_email` | object | 否 | 无 | GitHub 触发设备验证时，从该邮箱自动读取验证码 |
+| `accounts[].sso_email.imap_host` | string | 条件必填 | 无 | IMAP 服务器，如 `imap.qq.com` |
+| `accounts[].sso_email.imap_port` | number | 否 | `993` | IMAP 端口（SSL） |
+| `accounts[].sso_email.username` | string | 条件必填 | 无 | 邮箱登录名 |
+| `accounts[].sso_email.password` | string | 条件必填 | 无 | IMAP 授权码（QQ/163 等非登录密码） |
+| `accounts[].sso_email.mailbox` | string | 否 | `INBOX` | 邮箱文件夹 |
 
 ### `accounts` 必填规则
 
 - `api_user` 永远必填
-- `cookies` 和 `username + password` 至少要提供一组
+- `cookies`、`username + password`、`sso_provider + sso_username + sso_password` 至少要提供一组
 - 如果提供了 `username`，就必须同时提供 `password`
 - 如果提供了 `password`，就必须同时提供 `username`
+- 如果提供了任一 SSO 字段，`sso_provider`、`sso_username`、`sso_password` 必须同时提供
 
 ### `accounts[].cookies` 支持格式
 
@@ -297,8 +373,26 @@ logs/
 |------|------|------|------|
 | `cookies._username` | string | 否 | 旧版用户名字段，等价于顶层 `username` |
 | `cookies._password` | string | 否 | 旧版密码字段，等价于顶层 `password` |
+| `cookies._sso_provider` | string | 否 | SSO 平台兼容字段，等价于顶层 `sso_provider` |
+| `cookies._sso_username` | string | 否 | SSO 用户名兼容字段，等价于顶层 `sso_username` |
+| `cookies._sso_password` | string | 否 | SSO 密码兼容字段，等价于顶层 `sso_password` |
 
-推荐使用顶层 `username` / `password`，不要再写 `_username` / `_password`。
+推荐使用顶层 `username` / `password` / `sso_*` 字段，不要再写 `_username` / `_password` / `_sso_*`。
+
+### SSO 登录说明
+
+当没有有效 `session` Cookie 时，程序会通过站点的 `/api/oauth/state` 接口与 `client_id` 直接跳转到 GitHub / LinuxDo 的 OAuth 授权页（部分站点登录页不再渲染第三方登录按钮，因此不依赖页面按钮），在第三方登录页填写 `sso_username` / `sso_password`，授权完成后返回 AnyRouter 或 AgentRouter，并从浏览器上下文中提取 Cookie 信息。
+
+SSO 登录依赖第三方平台页面结构和风控策略。首次配置建议将 `runtime.playwright_headless` 设置为 `false`，便于处理验证码、二次验证或授权确认。若第三方平台需要 2FA 则自动流程无法完成。
+
+#### GitHub 设备验证（邮箱验证码）
+
+GitHub 在新设备 / 新 IP 登录时常要求设备验证，会向账号邮箱发送 6 位验证码。为该账号配置 `sso_email`（IMAP）后，程序会自动登录邮箱、读取最新的 GitHub 验证码、填入验证页并提交，从而完成 SSO。
+
+- QQ 邮箱：`imap_host = imap.qq.com`，`password` 填 **IMAP/SMTP 授权码**（在邮箱设置中开启 IMAP 服务后生成），不是登录密码。
+- 163 邮箱：`imap_host = imap.163.com`，同样使用授权码。
+- 仅 `sso_email` 三件套（`imap_host` / `username` / `password`）齐全时才会启用自动取码；否则遇到设备验证会直接报出可读错误。
+- 2FA（TOTP 动态码）无法自动完成，请改用 cookie 登录。
 
 ## 当前公开配置项中的“枚举/受限取值”说明
 
@@ -307,6 +401,7 @@ logs/
 | 字段 | 可选值/语义 | 说明 |
 |------|-------------|------|
 | `accounts[].provider` | `anyrouter`、`agentrouter`、自定义 Provider 名称 | 必须指向一个存在的 Provider |
+| `accounts[].sso_provider` | `github`、`linuxdo` | 触发对应第三方 SSO 登录 |
 | `providers.<name>.sign_in_path` | 字符串 或 `null` | 字符串表示手动签到，`null` 表示自动签到 |
 | `runtime.playwright_headless` | `true` / `false` | 是否显示浏览器窗口 |
 
@@ -329,6 +424,9 @@ logs/
 | `CUSTOM_SMTP_SERVER` | 否 | SMTP 服务器地址 | 仅当 `email` 配置缺失时回退使用 |
 | `ANYROUTER_USERNAME_<N>` | 否 | 第 N 个账号用户名 | 仅作为账号级账密最终兜底 |
 | `ANYROUTER_PASSWORD_<N>` | 否 | 第 N 个账号密码 | 仅作为账号级账密最终兜底 |
+| `ANYROUTER_SSO_PROVIDER_<N>` | 否 | 第 N 个账号 SSO 平台 | 仅作为账号级 SSO 最终兜底 |
+| `ANYROUTER_SSO_USERNAME_<N>` | 否 | 第 N 个账号 SSO 用户名或邮箱 | 仅作为账号级 SSO 最终兜底 |
+| `ANYROUTER_SSO_PASSWORD_<N>` | 否 | 第 N 个账号 SSO 密码 | 仅作为账号级 SSO 最终兜底 |
 
 ### 账号级账密优先级
 
@@ -337,6 +435,14 @@ logs/
 1. `accounts[].username` / `accounts[].password`
 2. `accounts[].cookies._username` / `accounts[].cookies._password`
 3. `ANYROUTER_USERNAME_<N>` / `ANYROUTER_PASSWORD_<N>`
+
+### 账号级 SSO 优先级
+
+从高到低：
+
+1. `accounts[].sso_provider` / `accounts[].sso_username` / `accounts[].sso_password`
+2. `accounts[].cookies._sso_provider` / `accounts[].cookies._sso_username` / `accounts[].cookies._sso_password`
+3. `ANYROUTER_SSO_PROVIDER_<N>` / `ANYROUTER_SSO_USERNAME_<N>` / `ANYROUTER_SSO_PASSWORD_<N>`
 
 ## 日志输出行为
 
@@ -350,7 +456,7 @@ logs/
 2. 合并内置 Provider 与自定义 Provider
 3. 校验账号配置
 4. 启动 Playwright
-5. 对每个账号执行：打开登录页、尝试登录、查询余额、签到、再次查询余额
+5. 对每个账号执行：打开登录页、按 Cookie / SSO / 账密尝试登录、查询余额、签到、再次查询余额
 6. 计算余额哈希并判断是否变化
 7. 发送签到邮件报告
 
@@ -367,6 +473,8 @@ logs/
 ### 3. 可以只配置 `cookies` 吗？
 
 可以。只要 `cookies` 能完成认证，就不需要 `username` / `password`。
+
+也可以只配置 SSO 三件套：`sso_provider`、`sso_username`、`sso_password`。程序会通过 GitHub 或 LinuxDo 登录站点并获取 Cookie。
 
 ### 4. `sign_in_path` 什么时候写 `null`？
 

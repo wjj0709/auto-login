@@ -1,0 +1,99 @@
+{
+  "runtime": {
+    "python_bin": "python3",
+    "playwright_script": "scripts/playwright_checkin.py",
+    "playwright_headless": true
+  },
+  "logging": {
+    "path": "logs",
+    "max_file_size_mb": 10
+  },
+  "email": {
+    "user": "your_email@qq.com",
+    "pass": "your_smtp_authorization_code",
+    "to": "receiver@example.com",
+    "sender": "your_email@qq.com",
+    "smtp_server": "smtp.qq.com"
+  },
+  "providers": {
+    "custom": {
+      "name": "custom",
+      "domain": "https://example.com",
+      "login_path": "/login",
+      "sign_in_path": "/api/user/sign_in",
+      "user_info_path": "/api/user/self",
+      "api_user_key": "new-api-user"
+    },
+    "auto-checkin-site": {
+      "domain": "https://auto.example.com",
+      "login_path": "/login",
+      "sign_in_path": null,
+      "user_info_path": "/api/user/self",
+      "api_user_key": "new-api-user"
+    }
+  },
+  "accounts": [
+    {
+      "name": "账号A：仅 Cookie（对象格式）",
+      "provider": "anyrouter",
+      "api_user": "148714",
+      "cookies": {
+        "session": "your_session_cookie_value"
+      }
+    },
+    {
+      "name": "账号B：Cookie 字符串格式",
+      "provider": "anyrouter",
+      "api_user": "148715",
+      "cookies": "session=your_session_cookie_value; other_cookie=value"
+    },
+    {
+      "name": "账号C：Cookie + 账密兜底",
+      "provider": "anyrouter",
+      "api_user": "148716",
+      "cookies": {
+        "session": "maybe_expired_session"
+      },
+      "username": "your_login_name",
+      "password": "your_login_password"
+    },
+    {
+      "name": "账号D：仅账号密码",
+      "provider": "custom",
+      "api_user": "9527",
+      "username": "alice",
+      "password": "secret"
+    },
+    {
+      "name": "账号E：GitHub SSO + 邮箱自动取设备验证码",
+      "provider": "anyrouter",
+      "api_user": "10086",
+      "sso_provider": "github",
+      "sso_username": "your_github_username",
+      "sso_password": "your_github_password",
+      "sso_email": {
+        "imap_host": "imap.qq.com",
+        "imap_port": 993,
+        "username": "your_mailbox@qq.com",
+        "password": "your_imap_authorization_code",
+        "mailbox": "INBOX"
+      }
+    },
+    {
+      "name": "账号F：LinuxDo SSO",
+      "provider": "anyrouter",
+      "api_user": "10087",
+      "sso_provider": "linuxdo",
+      "sso_username": "your_linuxdo_username",
+      "sso_password": "your_linuxdo_password"
+    },
+    {
+      "name": "账号G：自动签到站点",
+      "provider": "auto-checkin-site",
+      "api_user": "20001",
+      "cookies": {
+        "session": "your_session_cookie_value"
+      }
+    }
+  ]
+}
