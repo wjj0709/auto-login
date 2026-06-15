@@ -1,0 +1,24 @@
+.idea
+.vscode
+.codefuse
+
+# 构建数据
+target
+.pycache
+
+# 真实的配置信息
+.env
+conf.json
+
+# 运行时产物
+balance_hash.txt
+
+# 参考数据
+docs/reference
+
+# 日志信息
+logs
+*.log
+
+# 测试用例
+tests
