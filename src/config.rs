@@ -3,7 +3,7 @@
 // ============================================================================
 // 功能：
 // 1. 加载 Provider（站点）配置：内置配置 + 配置文件 + 环境变量覆盖
-// 2. 加载账号配置：支持 Cookie 方式或账号密码方式登录
+// 2. 加载账号配置：支持 Cookie、账号密码或 SSO 方式登录
 // 3. 支持从配置文件读取 accounts/providers（JSON / TOML）
 // ============================================================================
 
@@ -119,6 +119,22 @@ pub struct AccountConfig {
     /// 登录密码（可选；若无有效 cookie，可回退登录）
     #[serde(default)]
     password: Option<String>,
+
+    /// SSO 平台名称（可选；支持 github / linuxdo）
+    #[serde(default)]
+    sso_provider: Option<String>,
+
+    /// SSO 平台用户名或邮箱
+    #[serde(default)]
+    sso_username: Option<String>,
+
+    /// SSO 平台密码
+    #[serde(default)]
+    sso_password: Option<String>,
+
+    /// 读取设备验证码的邮箱 IMAP 配置（可选，GitHub SSO 触发设备验证时使用）
+    #[serde(default)]
+    sso_email: Option<SsoEmailConfig>,
 }
 
 impl_ref_accessors!(AccountConfig {
@@ -128,10 +144,39 @@ impl_ref_accessors!(AccountConfig {
     name: Option<String> => name, set_name;
     username: Option<String> => username, set_username;
     password: Option<String> => password, set_password;
+    sso_provider: Option<String> => sso_provider, set_sso_provider;
+    sso_username: Option<String> => sso_username, set_sso_username;
+    sso_password: Option<String> => sso_password, set_sso_password;
+    sso_email: Option<SsoEmailConfig> => sso_email, set_sso_email;
 });
 
 fn default_provider() -> String {
     "anyrouter".to_string()
+}
+
+/// 读取设备验证码所需的邮箱 IMAP 配置（用于 GitHub SSO 设备验证）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SsoEmailConfig {
+    /// IMAP 服务器地址（如 imap.qq.com）
+    pub imap_host: String,
+    /// IMAP 端口，默认 993（SSL）
+    #[serde(default = "default_imap_port")]
+    pub imap_port: u16,
+    /// 邮箱登录名
+    pub username: String,
+    /// IMAP 授权码 / 密码（QQ、163 等需使用授权码）
+    pub password: String,
+    /// 邮箱文件夹，默认 INBOX
+    #[serde(default = "default_mailbox")]
+    pub mailbox: String,
+}
+
+fn default_imap_port() -> u16 {
+    993
+}
+
+fn default_mailbox() -> String {
+    "INBOX".to_string()
 }
 
 fn default_cookies() -> Value {
@@ -170,8 +215,47 @@ impl AccountConfig {
             .or_else(|| cookie_meta_field(&self.cookies, "_password"))
     }
 
+    /// 返回最终生效的 SSO 用户名。
+    /// 优先级：显式字段 sso_username > cookies._sso_username
+    pub fn resolved_sso_username(&self) -> Option<String> {
+        self.sso_username
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(ToOwned::to_owned)
+            .or_else(|| cookie_meta_field(&self.cookies, "_sso_username"))
+    }
+
+    /// 返回最终生效的 SSO 密码。
+    /// 优先级：显式字段 sso_password > cookies._sso_password
+    pub fn resolved_sso_password(&self) -> Option<String> {
+        self.sso_password
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(ToOwned::to_owned)
+            .or_else(|| cookie_meta_field(&self.cookies, "_sso_password"))
+    }
+
+    /// 返回最终生效的 SSO Provider。
+    /// 优先级：显式字段 sso_provider > cookies._sso_provider
+    pub fn resolved_sso_provider(&self) -> Option<String> {
+        self.sso_provider
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(ToOwned::to_owned)
+            .or_else(|| cookie_meta_field(&self.cookies, "_sso_provider"))
+    }
+
+    pub fn has_sso_material(&self) -> bool {
+        self.resolved_sso_provider().is_some()
+            && self.resolved_sso_username().is_some()
+            && self.resolved_sso_password().is_some()
+    }
+
     /// 判断是否显式提供了可用的 cookie。
-    /// cookies 对象中的 `_username` / `_password` 不计入 cookie 数量。
+    /// cookies 对象中的 `_username` / `_password` / `_sso_*` 不计入 cookie 数量。
     pub fn has_cookie_material(&self) -> bool {
         match &self.cookies {
             Value::Object(map) => map.keys().any(|key| !key.starts_with('_')),
@@ -446,6 +530,9 @@ fn validate_accounts(accounts: &[AccountConfig]) -> Result<(), String> {
 
         let username = account.resolved_username();
         let password = account.resolved_password();
+        let sso_provider = account.resolved_sso_provider();
+        let sso_username = account.resolved_sso_username();
+        let sso_password = account.resolved_sso_password();
         if username.is_some() ^ password.is_some() {
             return Err(format!(
                 "[{}] username/password must be provided together",
@@ -453,18 +540,37 @@ fn validate_accounts(accounts: &[AccountConfig]) -> Result<(), String> {
             ));
         }
 
-        if !account.has_cookie_material() && username.is_none() {
+        let has_partial_sso =
+            sso_provider.is_some() || sso_username.is_some() || sso_password.is_some();
+        if has_partial_sso
+            && !(sso_provider.is_some() && sso_username.is_some() && sso_password.is_some())
+        {
             return Err(format!(
-                "[{}] Missing authentication material: provide cookies or username/password",
+                "[{}] sso_provider/sso_username/sso_password must be provided together",
                 display_name
             ));
         }
 
-        let auth_mode = match (account.has_cookie_material(), username.is_some()) {
-            (true, true) => "cookies + username/password fallback",
-            (true, false) => "cookies only",
-            (false, true) => "username/password only",
-            (false, false) => "invalid",
+        if !account.has_cookie_material() && username.is_none() && !account.has_sso_material() {
+            return Err(format!(
+                "[{}] Missing authentication material: provide cookies, username/password, or SSO credentials",
+                display_name
+            ));
+        }
+
+        let auth_mode = match (
+            account.has_cookie_material(),
+            username.is_some(),
+            account.has_sso_material(),
+        ) {
+            (true, true, true) => "cookies + username/password fallback + SSO fallback",
+            (true, true, false) => "cookies + username/password fallback",
+            (true, false, true) => "cookies + SSO fallback",
+            (true, false, false) => "cookies only",
+            (false, true, true) => "username/password + SSO fallback",
+            (false, true, false) => "username/password only",
+            (false, false, true) => "SSO only",
+            (false, false, false) => "invalid",
         };
 
         log::info_f(
@@ -607,6 +713,35 @@ mod tests {
     }
 
     #[test]
+    fn parses_sso_account_from_json_config() {
+        let config = parse_file_config(
+            Path::new("anyrouter-config.json"),
+            r#"
+            {
+              "accounts": [
+                {
+                  "name": "github-sso",
+                  "provider": "anyrouter",
+                  "api_user": "148714",
+                  "sso_provider": "github",
+                  "sso_username": "alice",
+                  "sso_password": "secret"
+                }
+              ]
+            }
+            "#,
+        )
+        .unwrap();
+
+        let account = &config.accounts[0];
+        assert_eq!(account.resolved_sso_provider().as_deref(), Some("github"));
+        assert_eq!(account.resolved_sso_username().as_deref(), Some("alice"));
+        assert_eq!(account.resolved_sso_password().as_deref(), Some("secret"));
+        assert!(account.has_sso_material());
+        assert!(!account.has_cookie_material());
+    }
+
+    #[test]
     fn parses_toml_config_file() {
         let config = parse_file_config(
             Path::new("anyrouter-config.toml"),
@@ -641,9 +776,50 @@ mod tests {
             name: Some("pwd-only".to_string()),
             username: Some("alice".to_string()),
             password: Some("secret".to_string()),
+            sso_provider: None,
+            sso_username: None,
+            sso_password: None,
+            sso_email: None,
         };
 
         assert!(validate_accounts(&[account]).is_ok());
+    }
+
+    #[test]
+    fn validates_sso_only_account() {
+        let account = AccountConfig {
+            cookies: Value::Null,
+            api_user: "148714".to_string(),
+            provider: "anyrouter".to_string(),
+            name: Some("sso-only".to_string()),
+            username: None,
+            password: None,
+            sso_provider: Some("linuxdo".to_string()),
+            sso_username: Some("alice".to_string()),
+            sso_password: Some("secret".to_string()),
+            sso_email: None,
+        };
+
+        assert!(validate_accounts(&[account]).is_ok());
+    }
+
+    #[test]
+    fn rejects_incomplete_sso_account() {
+        let account = AccountConfig {
+            cookies: Value::Null,
+            api_user: "148714".to_string(),
+            provider: "anyrouter".to_string(),
+            name: Some("bad-sso".to_string()),
+            username: None,
+            password: None,
+            sso_provider: Some("github".to_string()),
+            sso_username: Some("alice".to_string()),
+            sso_password: None,
+            sso_email: None,
+        };
+
+        let err = validate_accounts(&[account]).unwrap_err();
+        assert!(err.contains("sso_provider/sso_username/sso_password"));
     }
 
     #[test]
@@ -655,6 +831,10 @@ mod tests {
             name: Some("invalid".to_string()),
             username: None,
             password: None,
+            sso_provider: None,
+            sso_username: None,
+            sso_password: None,
+            sso_email: None,
         };
 
         let err = validate_accounts(&[account]).unwrap_err();
@@ -673,6 +853,10 @@ mod tests {
             name: None,
             username: None,
             password: None,
+            sso_provider: None,
+            sso_username: None,
+            sso_password: None,
+            sso_email: None,
         };
 
         assert_eq!(account.resolved_username().as_deref(), Some("legacy-user"));

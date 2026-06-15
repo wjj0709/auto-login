@@ -17,7 +17,7 @@ use std::time::Instant;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
-use crate::config::{AccountConfig, ProviderConfig};
+use crate::config::{AccountConfig, ProviderConfig, SsoEmailConfig};
 use crate::log;
 
 const DEFAULT_CONFIG_FILE: &str = "conf.json";
@@ -48,6 +48,15 @@ pub struct PlaywrightAccount {
     username: Option<String>,
     /// 登录密码（可选，Cookie 失效时回退登录用）
     password: Option<String>,
+    /// SSO 平台名称（github / linuxdo）
+    sso_provider: Option<String>,
+    /// SSO 平台用户名或邮箱
+    sso_username: Option<String>,
+    /// SSO 平台密码
+    sso_password: Option<String>,
+    /// 读取设备验证码的邮箱 IMAP 配置（可选）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sso_email: Option<SsoEmailConfig>,
 }
 
 impl_ref_accessors!(PlaywrightAccount {
@@ -62,6 +71,9 @@ impl_ref_accessors!(PlaywrightAccount {
     cookies: serde_json::Value => cookies, set_cookies;
     username: Option<String> => username, set_username;
     password: Option<String> => password, set_password;
+    sso_provider: Option<String> => sso_provider, set_sso_provider;
+    sso_username: Option<String> => sso_username, set_sso_username;
+    sso_password: Option<String> => sso_password, set_sso_password;
 });
 
 /// Cookie 过期分析结果
@@ -226,6 +238,16 @@ fn build_account(
         password: account
             .resolved_password()
             .or_else(|| trimmed_env_var(&format!("ANYROUTER_PASSWORD_{}", index + 1))),
+        sso_provider: account
+            .resolved_sso_provider()
+            .or_else(|| trimmed_env_var(&format!("ANYROUTER_SSO_PROVIDER_{}", index + 1))),
+        sso_username: account
+            .resolved_sso_username()
+            .or_else(|| trimmed_env_var(&format!("ANYROUTER_SSO_USERNAME_{}", index + 1))),
+        sso_password: account
+            .resolved_sso_password()
+            .or_else(|| trimmed_env_var(&format!("ANYROUTER_SSO_PASSWORD_{}", index + 1))),
+        sso_email: account.sso_email().clone(),
     }
 }
 
