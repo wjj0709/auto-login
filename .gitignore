@@ -19,6 +19,3 @@ docs/reference
 # 日志信息
 logs
 *.log
-
-# 测试用例
-tests
