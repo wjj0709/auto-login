@@ -1,5 +1,8 @@
 .idea
+.qoder
+.codex
 .vscode
+.claude
 .codefuse
 
 # 构建数据
@@ -14,8 +17,16 @@ conf.json
 balance_hash.txt
 
 # 参考数据
+fix-img
+docs/refs
 docs/reference
 
 # 日志信息
 logs
 *.log
+
+# AI Coding
+.superpowers
+
+# 测试数据
+tests
