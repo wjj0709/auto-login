@@ -183,6 +183,21 @@ class PlaywrightCheckinHelpersTest(unittest.TestCase):
 
 
 class PlaywrightCheckinAsyncTest(unittest.IsolatedAsyncioTestCase):
+    async def test_session_cookie_present_supports_custom_cookie_names(self):
+        class FakeContext:
+            async def cookies(self, _urls):
+                return [{"name": "_t", "value": "abc"}]
+
+        ctx = FakeContext()
+        self.assertTrue(
+            await playwright_checkin.session_cookie_present(
+                ctx, "https://linux.do", ("_t", "_forum_session")
+            )
+        )
+        self.assertFalse(
+            await playwright_checkin.session_cookie_present(ctx, "https://linux.do", ("session",))
+        )
+
     async def test_click_first_available_uses_playwright_first_property(self):
         calls = []
 

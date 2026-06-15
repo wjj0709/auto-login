@@ -1353,11 +1353,15 @@ async def login_linuxdo_sso(page: Page, account: AccountInput, timeout_ms: int) 
     await wait_for_return_to_service(page, account, timeout_ms)
 
 
-async def session_cookie_present(context: BrowserContext, domain: str) -> bool:
-    """检查浏览器上下文里是否已存在非空的 session cookie。"""
+async def session_cookie_present(
+    context: BrowserContext,
+    domain: str,
+    cookie_names: tuple[str, ...] = ("session",),
+) -> bool:
+    """检查浏览器上下文里是否已存在指定名称的非空会话 cookie。"""
     cookies = await context.cookies([domain])
     return any(
-        cookie.get("name") == "session" and cookie.get("value")
+        cookie.get("name") in cookie_names and cookie.get("value")
         for cookie in cookies
     )
 
@@ -1367,6 +1371,7 @@ async def wait_for_session_cookie(
     domain: str,
     timeout_ms: int,
     poll_interval_ms: int = 500,
+    cookie_names: tuple[str, ...] = ("session",),
 ) -> bool:
     """轮询等待 OAuth 回调异步写入 session cookie。
 
@@ -1378,7 +1383,7 @@ async def wait_for_session_cookie(
     loop = asyncio.get_event_loop()
     deadline = loop.time() + max(timeout_ms, 0) / 1000.0
     while True:
-        if await session_cookie_present(context, domain):
+        if await session_cookie_present(context, domain, cookie_names):
             return True
         if loop.time() >= deadline:
             return False
