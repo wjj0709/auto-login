@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import pathlib
 import sys
 import unittest
@@ -132,6 +133,32 @@ class PlaywrightCheckinHelpersTest(unittest.TestCase):
         )
 
         self.assertEqual(account.sso_email["imap_host"], "imap.qq.com")
+
+    def test_sanitize_recovers_surrogate_escaped_gbk_text(self):
+        # 复现线上 bug：服务器返回的 GBK 字节经 surrogateescape 解码成孤立代理项，
+        # 直接 json.dumps 会写出非法 UTF-8，导致 Rust 端整批解析失败。
+        gbk_bytes = "用户名或密码错误".encode("gbk")
+        mangled = gbk_bytes.decode("utf-8", "surrogateescape")
+
+        cleaned = playwright_checkin.sanitize_for_json({"error": "login rejected: " + mangled})
+
+        self.assertEqual(cleaned["error"], "login rejected: 用户名或密码错误")
+        # 清洗后必须能编码为合法 UTF-8（Rust 才能解析）
+        json.dumps(cleaned, ensure_ascii=False).encode("utf-8")
+
+    def test_sanitize_guarantees_valid_utf8_for_unrecoverable_bytes(self):
+        # 即便无法按已知编码还原，也必须产出合法 UTF-8，绝不残留孤立代理项
+        mangled = b"\xff\xfe\x00bad".decode("utf-8", "surrogateescape")
+
+        cleaned = playwright_checkin.sanitize_for_json(mangled)
+
+        self.assertFalse(any("\ud800" <= ch <= "\udfff" for ch in cleaned))
+        cleaned.encode("utf-8")  # 不抛 UnicodeEncodeError 即合法
+
+    def test_sanitize_preserves_plain_text_and_structure(self):
+        data = {"results": [{"name": "教育邮箱", "n": 1, "ok": True, "x": None}]}
+
+        self.assertEqual(playwright_checkin.sanitize_for_json(data), data)
 
 
 class PlaywrightCheckinAsyncTest(unittest.IsolatedAsyncioTestCase):

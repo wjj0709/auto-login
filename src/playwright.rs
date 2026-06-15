@@ -306,15 +306,95 @@ fn locate_script() -> PathBuf {
 }
 
 /// 获取 Python 解释器路径
-/// 优先使用 PYTHON_BIN 环境变量，默认使用 "python3"
+///
+/// 优先级：
+/// 1. 运行时配置 `runtime.python_bin` 或环境变量 `PYTHON_BIN` 显式指定（若可运行）
+/// 2. 显式配置不可运行时，自动探测平台候选解释器并回退（并输出告警）
+/// 3. 无显式配置时，直接探测平台候选解释器
+/// 4. 全部不可用时，返回平台默认值（让后续 spawn 给出明确错误）
 fn locate_python() -> String {
+    let configured = configured_python_bin();
+    let (python, warning) =
+        resolve_python(configured.as_deref(), python_candidates(), python_is_runnable);
+    if let Some(message) = warning {
+        log::warn(&message);
+    }
+    python
+}
+
+/// 读取用户显式配置的 Python 解释器（运行时配置文件优先，其次 PYTHON_BIN 环境变量）
+fn configured_python_bin() -> Option<String> {
     if let Some(runtime) = load_runtime_file_config() {
         if let Some(python_bin) = runtime.python_bin.filter(|value| !value.trim().is_empty()) {
-            return python_bin;
+            return Some(python_bin);
         }
     }
 
-    std::env::var("PYTHON_BIN").unwrap_or_else(|_| "python3".to_string())
+    std::env::var("PYTHON_BIN")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+/// 平台相关的候选解释器探测顺序。
+/// Windows 上 `python3` 往往只是无法运行的应用商店占位符（执行返回退出码 9009/49），
+/// 因此优先探测 `python` / `py`；类 Unix 系统上 `python3` 才是常规命令。
+fn python_candidates() -> &'static [&'static str] {
+    if cfg!(windows) {
+        &["python", "py", "python3"]
+    } else {
+        &["python3", "python"]
+    }
+}
+
+/// 探测某个解释器命令是否可运行（执行 `<cmd> --version` 并检查退出码）。
+fn python_is_runnable(cmd: &str) -> bool {
+    std::process::Command::new(cmd)
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+/// 纯函数：依据显式配置与候选列表选出可用的 Python 解释器。
+/// `is_runnable` 用于判断某个命令是否可运行，便于注入测试。
+/// 返回 `(选中的解释器, 可选告警信息)`。
+fn resolve_python<F: Fn(&str) -> bool>(
+    configured: Option<&str>,
+    candidates: &[&str],
+    is_runnable: F,
+) -> (String, Option<String>) {
+    // 1) 显式配置优先：可运行则直接采用
+    if let Some(bin) = configured.map(str::trim).filter(|value| !value.is_empty()) {
+        if is_runnable(bin) {
+            return (bin.to_string(), None);
+        }
+        // 配置的解释器不可运行（如 Windows 上的 "python3"）→ 探测候选并回退
+        if let Some(found) = candidates.iter().copied().find(|cmd| is_runnable(cmd)) {
+            let warning = format!(
+                "Configured Python interpreter \"{}\" is not runnable; falling back to \"{}\". \
+                 Set runtime.python_bin or PYTHON_BIN to silence this.",
+                bin, found
+            );
+            return (found.to_string(), Some(warning));
+        }
+        // 无候选可用时保留配置值，让后续 spawn 给出针对该值的明确错误
+        return (bin.to_string(), None);
+    }
+
+    // 2) 无显式配置：探测候选，取首个可运行者
+    if let Some(found) = candidates.iter().copied().find(|cmd| is_runnable(cmd)) {
+        return (found.to_string(), None);
+    }
+
+    // 3) 全部不可用：返回平台默认值（spawn 会失败并给出可读错误）
+    (
+        candidates.first().copied().unwrap_or("python3").to_string(),
+        None,
+    )
 }
 
 /// 读取无头模式配置
@@ -417,6 +497,64 @@ mod tests {
         let runtime = parsed.runtime.unwrap();
         assert_eq!(runtime.python_bin.as_deref(), Some(".venv/bin/python3"));
         assert_eq!(runtime.playwright_headless, Some(true));
+    }
+
+    #[test]
+    fn resolve_python_uses_configured_interpreter_when_runnable() {
+        let (python, warning) =
+            resolve_python(Some("/venv/bin/python"), &["python3", "python"], |_| true);
+        assert_eq!(python, "/venv/bin/python");
+        assert!(warning.is_none());
+    }
+
+    #[test]
+    fn resolve_python_falls_back_when_configured_interpreter_unrunnable() {
+        // 复现线上 bug：conf.json 配置 python_bin="python3"，但 Windows 上 python3 不可运行，
+        // 必须自动回退到可用的 python，而不是固执地返回不可用的 python3。
+        let (python, warning) = resolve_python(
+            Some("python3"),
+            &["python", "py", "python3"],
+            |cmd| cmd == "python", // 仅 python 可运行
+        );
+        assert_eq!(python, "python");
+        assert!(warning.is_some(), "回退时应给出告警信息");
+    }
+
+    #[test]
+    fn resolve_python_probes_candidates_when_unconfigured() {
+        // 未显式配置时应探测候选并跳过不可运行者
+        let (python, warning) =
+            resolve_python(None, &["python3", "python"], |cmd| cmd == "python");
+        assert_eq!(python, "python");
+        assert!(warning.is_none());
+    }
+
+    #[test]
+    fn resolve_python_keeps_configured_when_nothing_runnable() {
+        // 配置不可用且无候选可用时，保留配置值以便 spawn 给出针对性错误
+        let (python, _) = resolve_python(Some("python3"), &["python", "py"], |_| false);
+        assert_eq!(python, "python3");
+    }
+
+    #[test]
+    fn resolve_python_returns_default_when_unconfigured_and_nothing_runnable() {
+        let (python, _) = resolve_python(None, &["python", "py", "python3"], |_| false);
+        assert_eq!(python, "python");
+    }
+
+    #[test]
+    fn windows_python_candidates_prefer_python_over_python3() {
+        let candidates = python_candidates();
+        if cfg!(windows) {
+            assert_eq!(candidates.first().copied(), Some("python"));
+            let py3_pos = candidates.iter().position(|c| *c == "python3");
+            assert!(
+                py3_pos.map(|p| p > 0).unwrap_or(true),
+                "Windows 上 python3 不应排在候选首位"
+            );
+        } else {
+            assert_eq!(candidates.first().copied(), Some("python3"));
+        }
     }
 }
 

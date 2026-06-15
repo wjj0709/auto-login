@@ -1806,6 +1806,55 @@ async def process_all_accounts(
     return results
 
 
+def _recover_text(text: str) -> str:
+    """将含孤立代理项的字符串尽力恢复为可读文本，并保证可安全编码为 UTF-8。
+
+    线上场景：服务器以 GBK 返回中文消息，其字节经 surrogateescape 解码成
+    \\udcXX 孤立代理项。这里先取回原始字节，再依次尝试 utf-8 / gbk 解码；
+    若都失败则用 replace 兜底，确保返回值不含孤立代理项。
+    """
+    if not any("\ud800" <= ch <= "\udfff" for ch in text):
+        return text
+    raw = text.encode("utf-8", "surrogateescape")
+    for enc in ("utf-8", "gbk", "gb18030"):
+        try:
+            return raw.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("utf-8", "replace")
+
+
+def sanitize_for_json(value):
+    """递归清洗对象，确保所有字符串均为合法 Unicode（无孤立代理项），
+    使其能被 json.dumps 序列化为合法 UTF-8，供 Rust 主进程严格按 UTF-8 解析。
+    """
+    if isinstance(value, str):
+        return _recover_text(value)
+    if isinstance(value, dict):
+        return {key: sanitize_for_json(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [sanitize_for_json(item) for item in value]
+    return value
+
+
+def _configure_stdio() -> None:
+    """将标准输入/输出/错误流统一为 UTF-8。
+
+    Rust 主进程通过 stdin 传入 UTF-8 的 JSON，并按 UTF-8 解析 stdout。
+    但 Windows 上 Python 默认按 locale 编码（常为 GBK）读写这些流，会导致：
+    1. stdin 中的中文（如账号名）被按 GBK 误解码而损坏，结果名无法与账号匹配；
+    2. stdout 的 JSON 不是合法 UTF-8，Rust 端解析失败；
+    3. 终端日志中文乱码。
+    显式重配置为 UTF-8 可一并解决这些问题。
+    """
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            # 个别环境的流对象可能不支持 reconfigure，忽略即可
+            pass
+
+
 # ============================================================================
 # 入口函数
 # ============================================================================
@@ -1829,6 +1878,9 @@ def main() -> int:
     Returns:
         退出码
     """
+    # 统一标准流编码为 UTF-8，避免 Windows locale（GBK）导致 stdout 非法 UTF-8
+    _configure_stdio()
+
     # 从 stdin 读取全部内容
     raw = sys.stdin.read()
     if not raw.strip():
@@ -1854,7 +1906,8 @@ def main() -> int:
         return 1
 
     # 将结果 JSON 写入 stdout（Rust 主进程从此读取）
-    print(json.dumps(out, ensure_ascii=False))
+    # 先清洗，确保非 UTF-8 来源（如服务器 GBK 消息）不会产出非法 UTF-8
+    print(json.dumps(sanitize_for_json(out), ensure_ascii=False))
     return 0
 
 
