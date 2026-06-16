@@ -19,6 +19,76 @@ def load_module():
 playwright_checkin = load_module()
 
 
+def make_linuxdo_account():
+    return playwright_checkin.AccountInput(
+        name="L", provider="anyrouter", domain="https://anyrouter.top",
+        login_path="/login", sign_in_path="/api/user/sign_in",
+        user_info_path="/api/user/self", api_user_key="new-api-user", api_user="190030",
+        sso_provider="linuxdo", sso_username="nianliu.wjj", sso_password="pw",
+    )
+
+
+def make_fake_linuxdo_page(rec, title, *, session_present=False, session_after_submit=False, session_after_polls=None):
+    """构造 login_linuxdo_forum 测试用的假 page。
+
+    - session_present: cookies 始终包含 _t（模拟 profile 已登录）。
+    - session_after_submit: 仅在点击提交后 cookies 才出现 _t（模拟自动登录成功）。
+    - session_after_polls: 前 N 次 cookies() 返回空，之后出现 _t（模拟手动登录稍后完成）。
+    """
+    state = {"submitted": False, "polls": 0}
+
+    class FakeLocator:
+        def __init__(self, selector):
+            self._selector = selector
+
+        @property
+        def first(self):
+            return self
+
+        async def wait_for(self, state, timeout):
+            pass
+
+        async def fill(self, value, timeout=0):
+            rec.append(("fill", self._selector, value))
+
+        async def click(self, timeout=0, force=False):
+            rec.append(("click", self._selector))
+            state["submitted"] = True
+
+    class FakeContext:
+        async def cookies(self, _urls):
+            state["polls"] += 1
+            has = session_present
+            if session_after_submit and state["submitted"]:
+                has = True
+            if session_after_polls is not None and state["polls"] > session_after_polls:
+                has = True
+            return [{"name": "_t", "value": "sess"}] if has else []
+
+    class FakePage:
+        def __init__(self):
+            self.context = FakeContext()
+            self.url = "https://linux.do/login"
+
+        async def goto(self, url, wait_until=None):
+            rec.append(("goto", url))
+
+        async def title(self):
+            return title
+
+        async def inner_text(self, selector, timeout=0):
+            return ""
+
+        def locator(self, selector):
+            return FakeLocator(selector)
+
+    return FakePage()
+
+
+async def _noop(*args, **kwargs):
+    return None
+
+
 class PlaywrightCheckinHelpersTest(unittest.TestCase):
     def test_marks_execution_context_destroyed_as_transient(self):
         self.assertTrue(
@@ -223,122 +293,41 @@ class PlaywrightCheckinAsyncTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_login_linuxdo_forum_fills_and_confirms_session(self):
         rec = []
-
-        class FakeLocator:
-            def __init__(self, selector):
-                self._selector = selector
-
-            @property
-            def first(self):
-                return self
-
-            async def wait_for(self, state, timeout):
-                pass
-
-            async def fill(self, value, timeout=0):
-                rec.append(("fill", self._selector, value))
-
-            async def click(self, timeout=0, force=False):
-                rec.append(("click", self._selector))
-
-        class FakeContext:
-            async def cookies(self, _urls):
-                return [{"name": "_t", "value": "sess"}]
-
-        class FakePage:
-            def __init__(self, title):
-                self._title = title
-                self.context = FakeContext()
-                self.url = "https://linux.do/login"
-
-            async def goto(self, url, wait_until=None):
-                rec.append(("goto", url))
-
-            async def title(self):
-                return self._title
-
-            async def inner_text(self, selector, timeout=0):
-                return ""
-
-            def locator(self, selector):
-                return FakeLocator(selector)
-
-        account = playwright_checkin.AccountInput(
-            name="L", provider="anyrouter", domain="https://anyrouter.top",
-            login_path="/login", sign_in_path="/api/user/sign_in",
-            user_info_path="/api/user/self", api_user_key="new-api-user", api_user="190030",
-            sso_provider="linuxdo", sso_username="nianliu.wjj", sso_password="pw",
-        )
-
-        async def _noop(*args, **kwargs):
-            return None
-
+        page = make_fake_linuxdo_page(rec, "登录 - LINUX DO", session_after_submit=True)
         with mock.patch.object(playwright_checkin, "wait_for_page_stability", _noop):
-            await playwright_checkin.login_linuxdo_forum(FakePage("登录 - LINUX DO"), account, timeout_ms=5000)
-
+            await playwright_checkin.login_linuxdo_forum(page, make_linuxdo_account(), timeout_ms=5000)
         filled_values = [r[2] for r in rec if r[0] == "fill"]
         self.assertIn("nianliu.wjj", filled_values)
         self.assertIn("pw", filled_values)
         self.assertTrue(any(r[0] == "click" for r in rec))
         self.assertTrue(any(r == ("goto", "https://linux.do/login") for r in rec))
 
-    async def test_login_linuxdo_forum_raises_on_cloudflare(self):
+    async def test_login_linuxdo_forum_skips_when_already_logged_in(self):
         rec = []
-
-        class FakeLocator:
-            def __init__(self, selector):
-                self._selector = selector
-
-            @property
-            def first(self):
-                return self
-
-            async def wait_for(self, state, timeout):
-                pass
-
-            async def fill(self, value, timeout=0):
-                rec.append(("fill", self._selector, value))
-
-            async def click(self, timeout=0, force=False):
-                rec.append(("click", self._selector))
-
-        class FakeContext:
-            async def cookies(self, _urls):
-                return []
-
-        class FakePage:
-            def __init__(self, title):
-                self._title = title
-                self.context = FakeContext()
-                self.url = "https://linux.do/login"
-
-            async def goto(self, url, wait_until=None):
-                rec.append(("goto", url))
-
-            async def title(self):
-                return self._title
-
-            async def inner_text(self, selector, timeout=0):
-                return ""
-
-            def locator(self, selector):
-                return FakeLocator(selector)
-
-        account = playwright_checkin.AccountInput(
-            name="L", provider="anyrouter", domain="https://anyrouter.top",
-            login_path="/login", sign_in_path="/api/user/sign_in",
-            user_info_path="/api/user/self", api_user_key="new-api-user", api_user="190030",
-            sso_provider="linuxdo", sso_username="nianliu.wjj", sso_password="pw",
-        )
-
-        async def _noop(*args, **kwargs):
-            return None
-
+        page = make_fake_linuxdo_page(rec, "LINUX DO", session_present=True)
         with mock.patch.object(playwright_checkin, "wait_for_page_stability", _noop):
-            with self.assertRaises(RuntimeError) as caught:
-                await playwright_checkin.login_linuxdo_forum(FakePage("Just a moment..."), account, timeout_ms=5000)
+            await playwright_checkin.login_linuxdo_forum(page, make_linuxdo_account(), timeout_ms=5000)
+        # 持久化 profile 已登录：应复用并跳过登录，不应填表
+        self.assertFalse(any(r[0] == "fill" for r in rec))
 
-        self.assertIn("Cloudflare", str(caught.exception))
+    async def test_login_linuxdo_forum_raises_on_cloudflare_when_headless(self):
+        rec = []
+        page = make_fake_linuxdo_page(rec, "Just a moment...")
+        with mock.patch.object(playwright_checkin, "wait_for_page_stability", _noop), \
+                mock.patch.object(playwright_checkin, "_RUNTIME_HEADLESS", True):
+            with self.assertRaises(RuntimeError) as caught:
+                await playwright_checkin.login_linuxdo_forum(page, make_linuxdo_account(), timeout_ms=5000)
+        self.assertIn("人机校验", str(caught.exception))
+        self.assertFalse(any(r[0] == "fill" for r in rec))
+
+    async def test_login_linuxdo_forum_waits_for_manual_solve_when_not_headless(self):
+        rec = []
+        # 非 headless 下遇人机校验：先无会话→检测到校验→等待手动完成（稍后出现会话）
+        page = make_fake_linuxdo_page(rec, "Just a moment...", session_after_polls=1)
+        with mock.patch.object(playwright_checkin, "wait_for_page_stability", _noop), \
+                mock.patch.object(playwright_checkin, "_RUNTIME_HEADLESS", False):
+            await playwright_checkin.login_linuxdo_forum(page, make_linuxdo_account(), timeout_ms=5000)
+        # 走人机校验等待分支：不自动填表
         self.assertFalse(any(r[0] == "fill" for r in rec))
 
     async def test_click_first_available_uses_playwright_first_property(self):

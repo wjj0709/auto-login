@@ -1318,38 +1318,70 @@ def detect_github_login_block(page: Page) -> None:
         raise RuntimeError("GitHub 凭据可能不正确，登录未通过（停留在 GitHub 登录页）")
 
 
+LINUXDO_SESSION_COOKIES = ("_t", "_forum_session")
+
+
 async def login_linuxdo_forum(page: Page, account: AccountInput, timeout_ms: int) -> None:
-    """先登录 linux.do 论坛，建立会话，供后续 connect.linux.do OAuth 授权复用。"""
+    """登录 linux.do 论坛，建立会话，供后续 connect.linux.do OAuth 授权复用。
+
+    - 持久化 profile 已登录时直接复用，跳过登录；
+    - 遇人机校验：headless 给出可操作错误；非 headless 则等待用户在弹窗中手动完成。
+    """
     assert account.sso_username is not None
     assert account.sso_password is not None
 
     await page.goto("https://linux.do/login", wait_until="domcontentloaded")
     await wait_for_page_stability(page, min(timeout_ms, 8000))
 
+    # 持久化 profile 已登录 → 复用，跳过登录
+    if await session_cookie_present(page.context, "https://linux.do", LINUXDO_SESSION_COOKIES):
+        log(f"[{account.name}] reusing existing linux.do session (profile)")
+        return
+
     title = await page.title()
     try:
         body = await page.inner_text("body", timeout=2000)
     except Exception:
         body = ""
-    if detect_cloudflare_challenge(title, body):
-        raise RuntimeError(
-            "linux.do 被 Cloudflare 拦截（人机校验）；建议设置 PLAYWRIGHT_HEADLESS=0 手动通过，"
-            "或在浏览器上下文复用有效的 cf_clearance。"
-        )
 
+    if detect_cloudflare_challenge(title, body):
+        if _RUNTIME_HEADLESS:
+            raise RuntimeError(
+                "linux.do 出现人机校验，headless 模式无法自动通过。请先用非 headless 运行一次"
+                "（conf.json 设 runtime.playwright_headless=false），在弹出窗口手动完成校验并登录；"
+                "登录态会保存在持久化 profile 中供后续复用。"
+            )
+        log(f"[{account.name}] 检测到人机校验，请在弹出的浏览器窗口中手动完成校验并登录…")
+        if await wait_for_session_cookie(
+            page.context, "https://linux.do", max(timeout_ms, 180000), cookie_names=LINUXDO_SESSION_COOKIES
+        ):
+            log(f"[{account.name}] 手动登录已完成，继续")
+            return
+        raise RuntimeError("等待手动完成 linux.do 登录超时")
+
+    # 无校验 → 自动填表登录
     selectors = linuxdo_login_selectors()
     await fill_first_available(page, selectors["username"], account.sso_username)
     await fill_first_available(page, selectors["password"], account.sso_password)
     await click_first_available(page, selectors["submit"])
     await wait_for_page_stability(page, min(timeout_ms, 8000))
 
-    if not await wait_for_session_cookie(
-        page.context, "https://linux.do", timeout_ms, cookie_names=("_t", "_forum_session")
+    if await wait_for_session_cookie(
+        page.context, "https://linux.do", timeout_ms, cookie_names=LINUXDO_SESSION_COOKIES
     ):
-        raise RuntimeError(
-            f"linuxdo forum login failed: 登录后未检测到 linux.do 会话 cookie (current_url={page.url})"
-        )
-    log(f"[{account.name}] linux.do forum login OK")
+        log(f"[{account.name}] linux.do forum login OK")
+        return
+
+    # 自动登录未拿到会话：非 headless 时给用户手动补救的机会
+    if not _RUNTIME_HEADLESS:
+        log(f"[{account.name}] 自动登录未成功，请在窗口中手动完成登录…")
+        if await wait_for_session_cookie(
+            page.context, "https://linux.do", max(timeout_ms, 180000), cookie_names=LINUXDO_SESSION_COOKIES
+        ):
+            return
+    raise RuntimeError(
+        f"linuxdo forum login failed: 未检测到 linux.do 会话 cookie (current_url={page.url})"
+    )
 
 
 async def session_cookie_present(
