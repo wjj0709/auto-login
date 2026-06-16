@@ -182,6 +182,28 @@ class PlaywrightCheckinHelpersTest(unittest.TestCase):
             playwright_checkin.detect_cloudflare_challenge("登录 - LINUX DO", "用户名 密码 登录")
         )
 
+    def test_account_profile_dir_is_stable_and_per_account(self):
+        import os
+        import tempfile
+
+        base = tempfile.mkdtemp()
+
+        def acct(name, api_user):
+            return playwright_checkin.AccountInput(
+                name=name, provider="anyrouter", domain="https://x",
+                login_path="/login", sign_in_path="/s", user_info_path="/u",
+                api_user_key="new-api-user", api_user=api_user,
+            )
+
+        p1 = playwright_checkin.account_profile_dir(base, acct("教育邮箱", "151687"))
+        p1_again = playwright_checkin.account_profile_dir(base, acct("教育邮箱", "151687"))
+        p2 = playwright_checkin.account_profile_dir(base, acct("linuxdo_190030", "190030"))
+
+        self.assertEqual(p1, p1_again)
+        self.assertNotEqual(p1, p2)
+        self.assertTrue(os.path.isdir(p1))
+        self.assertTrue(os.path.isdir(p2))
+
 
 class PlaywrightCheckinAsyncTest(unittest.IsolatedAsyncioTestCase):
     async def test_session_cookie_present_supports_custom_cookie_names(self):

@@ -53,6 +53,10 @@ CHROME_UA = (
     "(KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
 )
 
+# 当前运行是否为无头模式；由 run() 依据 payload 设置，供登录流程判断
+# 是否可在弹出窗口里等待用户手动完成人机校验。
+_RUNTIME_HEADLESS = True
+
 TRANSIENT_PAGE_ERROR_MARKERS = (
     "Execution context was destroyed",
     "Cannot find context with specified id",
@@ -1814,6 +1818,8 @@ async def run(payload: dict) -> dict:
         {"results": [AccountResult.__dict__, ...]}
     """
     headless = bool(payload.get("headless", True))     # 无头模式，默认 True
+    global _RUNTIME_HEADLESS
+    _RUNTIME_HEADLESS = headless
     timeout_ms = int(payload.get("timeout_ms", 30000))  # 超时时间，默认 30 秒
     raw_accounts = payload.get("accounts") or []        # 账号列表
     accounts = [AccountInput(**a) for a in raw_accounts]  # 解析为 AccountInput 对象
@@ -1828,10 +1834,26 @@ async def run(payload: dict) -> dict:
             payload=payload,
             accounts=accounts,
             timeout_ms=timeout_ms,
+            profile_base=PROFILE_BASE_DIR,
         )
 
     # 将结果转为字典列表，方便 JSON 序列化
     return {"results": [r.__dict__ for r in results]}
+
+
+PROFILE_BASE_DIR = ".pw-profiles"
+
+
+def account_profile_dir(base: str, account: AccountInput) -> str:
+    """返回（并创建）账号专属的持久化浏览器 profile 目录。
+
+    每个账号独立目录，避免会话串号；目录持久保留，用于复用
+    cf_clearance / 登录态（绕过 linux.do 等站点的间歇性人机校验）。
+    """
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", f"{account.api_user}_{account.name}")
+    path = os.path.join(base, safe)
+    os.makedirs(path, exist_ok=True)
+    return path
 
 
 async def process_all_accounts(
@@ -1842,24 +1864,37 @@ async def process_all_accounts(
     timeout_ms: int,
     context_factory=launch_browser_context,
     account_processor=process_account,
+    profile_base: str | None = None,
 ) -> list[AccountResult]:
     """逐个处理账号，每个账号使用独立浏览器上下文。
 
     这里不能复用同一个 BrowserContext：站点 session cookie 名相同，
     复用上下文会让第二个账号看到第一个账号的登录态，进而触发
     New-Api-User 与登录用户不匹配。
+
+    profile_base 为空时使用一次性临时目录（用完即清）；非空时为每个账号
+    使用 {profile_base}/{账号} 持久目录，跨次运行复用登录态与 cf_clearance。
     """
     results: list[AccountResult] = []
 
     for acc in accounts:
         log(f"--- processing {acc.name} ---")
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            context = await context_factory(playwright, payload, tmp_dir)
+        if profile_base:
+            data_dir = account_profile_dir(profile_base, acc)
+            context = await context_factory(playwright, payload, data_dir)
             try:
                 res = await account_processor(context, acc, timeout_ms)
                 results.append(res)
             finally:
                 await context.close()
+        else:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                context = await context_factory(playwright, payload, tmp_dir)
+                try:
+                    res = await account_processor(context, acc, timeout_ms)
+                    results.append(res)
+                finally:
+                    await context.close()
 
     return results
 
